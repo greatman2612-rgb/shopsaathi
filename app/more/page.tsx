@@ -1,8 +1,9 @@
 "use client";
 
+import { useShopId } from "@/hooks/useShopId";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 /** Placeholder support number — replace with real ShopSaathi WhatsApp */
 const SUPPORT_WA = "https://wa.me/919000000000";
@@ -17,9 +18,10 @@ const SHOP_TYPE_OPTIONS = [
   "Salon",
   "Other",
 ] as const;
-const SHOP_ID = "shop001";
+type PlanId = "free" | "basic" | "pro" | "business";
 
 export default function MorePage() {
+  const { shopId, loading } = useShopId();
   const [shopName, setShopName] = useState("Meri Dukan");
   const [shopType, setShopType] = useState<(typeof SHOP_TYPE_OPTIONS)[number]>(
     "Kirana/General",
@@ -28,9 +30,11 @@ export default function MorePage() {
   const [phone, setPhone] = useState("98XXXXXXXX");
   const [editingProfile, setEditingProfile] = useState(false);
   const [plansOpen, setPlansOpen] = useState(false);
-  const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">(
+  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">(
     "monthly",
   );
+  const [currentPlan, setCurrentPlan] = useState<PlanId>("free");
+  const [processingPlan, setProcessingPlan] = useState<PlanId | null>(null);
 
   const avatarLetter = useMemo(() => {
     const c = shopName.trim().charAt(0);
@@ -40,12 +44,13 @@ export default function MorePage() {
   const startEditProfile = () => setEditingProfile(true);
 
   useEffect(() => {
+    if (!shopId) return;
     let cancelled = false;
     void (async () => {
       const { data, error } = await supabase
         .from("shops")
         .select("*")
-        .eq("id", SHOP_ID)
+        .eq("id", shopId)
         .maybeSingle();
       if (cancelled) return;
       if (error) {
@@ -63,11 +68,15 @@ export default function MorePage() {
             ? (rawType as (typeof SHOP_TYPE_OPTIONS)[number])
             : "Kirana/General",
         );
+        const rawPlan = String(row.plan ?? "free").toLowerCase();
+        if (rawPlan === "basic" || rawPlan === "pro" || rawPlan === "business")
+          setCurrentPlan(rawPlan);
+        else setCurrentPlan("free");
         return;
       }
 
       const { error: insertError } = await supabase.from("shops").insert({
-        id: SHOP_ID,
+        id: shopId,
         shop_name: "Meri Dukan",
         owner_name: "Dukan Malik",
         phone: "98XXXXXXXX",
@@ -76,16 +85,18 @@ export default function MorePage() {
       if (insertError) {
         console.error("create default shop failed:", insertError);
       }
+      setCurrentPlan("free");
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [shopId]);
 
   const saveProfile = () => {
+    if (!shopId) return;
     void (async () => {
       const { error } = await supabase.from("shops").upsert({
-        id: SHOP_ID,
+        id: shopId,
         shop_name: shopName,
         owner_name: ownerName,
         phone,
@@ -98,6 +109,82 @@ export default function MorePage() {
       setEditingProfile(false);
     })();
   };
+
+  const handleUpgrade = async (plan: PlanId) => {
+    if (plan === "free" || !shopId || processingPlan) return;
+    setProcessingPlan(plan);
+    try {
+      const res = await fetch("/api/payment/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan, period: billingPeriod }),
+      });
+      const order = await res.json();
+
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      document.body.appendChild(script);
+
+      script.onload = () => {
+        const options = {
+          key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+          amount: order.amount,
+          currency: order.currency,
+          name: "ShopSaathi",
+          description: `${plan} Plan`,
+          order_id: order.id,
+          theme: { color: "#16a34a" },
+          handler: async function (response: any) {
+            const verifyRes = await fetch("/api/payment/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                shop_id: shopId,
+                plan,
+              }),
+            });
+            const result = await verifyRes.json();
+            if (result.success) {
+              setCurrentPlan(plan);
+              alert("Plan upgrade ho gaya! 🎉");
+            } else {
+              alert("Verification fail ho gayi, support se contact karo");
+            }
+            setProcessingPlan(null);
+          },
+        };
+        const rzp = new (window as any).Razorpay(options);
+        rzp.open();
+      };
+
+      script.onerror = () => {
+        setProcessingPlan(null);
+        alert("Payment shuru nahi ho paya, dobara try karo");
+      };
+    } catch {
+      setProcessingPlan(null);
+      alert("Payment shuru nahi ho paya, dobara try karo");
+    }
+  };
+
+  if (loading) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-3 py-24"
+        role="status"
+        aria-live="polite"
+      >
+        <div
+          className="h-12 w-12 animate-spin rounded-full border-4 border-green-200 border-t-[#16a34a]"
+          aria-hidden
+        />
+        <p className="text-sm font-medium text-zinc-500">Loading…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5 pb-28">
@@ -207,7 +294,7 @@ export default function MorePage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-bold text-zinc-900">Subscription</h2>
           <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-zinc-600 ring-1 ring-zinc-200/80">
-            FREE Plan
+            {currentPlan} Plan
           </span>
         </div>
         <p className="mt-1 text-sm text-zinc-500">Abhi free plan chal raha hai</p>
@@ -258,9 +345,9 @@ export default function MorePage() {
             <div className="mx-auto flex w-full max-w-xs rounded-full bg-white p-1 ring-1 ring-zinc-200">
               <button
                 type="button"
-                onClick={() => setBillingCycle("monthly")}
+                onClick={() => setBillingPeriod("monthly")}
                 className={`min-h-10 flex-1 rounded-full px-3 text-xs font-bold uppercase tracking-wide transition ${
-                  billingCycle === "monthly"
+                  billingPeriod === "monthly"
                     ? "bg-[#16a34a] text-white"
                     : "text-zinc-600"
                 }`}
@@ -269,9 +356,9 @@ export default function MorePage() {
               </button>
               <button
                 type="button"
-                onClick={() => setBillingCycle("yearly")}
+                onClick={() => setBillingPeriod("yearly")}
                 className={`min-h-10 flex-1 rounded-full px-3 text-xs font-bold uppercase tracking-wide transition ${
-                  billingCycle === "yearly"
+                  billingPeriod === "yearly"
                     ? "bg-[#16a34a] text-white"
                     : "text-zinc-600"
                 }`}
@@ -280,11 +367,17 @@ export default function MorePage() {
               </button>
             </div>
 
-            <div className="rounded-2xl border border-white bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+            <div
+              className={`rounded-2xl bg-white p-3 shadow-sm ${
+                currentPlan === "free"
+                  ? "border border-green-200 ring-2 ring-green-200"
+                  : "border border-white ring-1 ring-zinc-100"
+              }`}
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <p className="font-bold text-zinc-900">Free Plan</p>
                 <p className="text-sm font-extrabold text-[#16a34a]">
-                  ₹0/{billingCycle === "monthly" ? "month" : "year"}
+                  ₹0
                 </p>
               </div>
               <ul className="mt-2 space-y-1 text-sm text-zinc-700">
@@ -294,22 +387,46 @@ export default function MorePage() {
               </ul>
             </div>
 
-            <div className="rounded-2xl border border-white bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+            <div
+              className={`rounded-2xl bg-white p-3 shadow-sm ${
+                currentPlan === "basic"
+                  ? "border border-green-200 ring-2 ring-green-200"
+                  : "border border-white ring-1 ring-zinc-100"
+              }`}
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <p className="font-bold text-zinc-900">Basic Plan</p>
                 <p className="text-sm font-extrabold text-[#16a34a]">
-                  {billingCycle === "monthly" ? "₹199/month" : "₹1,799/year"}
+                  {billingPeriod === "monthly" ? "₹199/month" : "₹1,799/year"}
                 </p>
               </div>
               <ul className="mt-2 space-y-1 text-sm text-zinc-700">
                 <li>• Unlimited bills</li>
                 <li>• Udhar tracking + reminders</li>
                 <li>• WhatsApp bill share</li>
-                {billingCycle === "yearly" ? <li>• Save ₹589 on yearly</li> : null}
+                {billingPeriod === "yearly" ? <li>• Save ₹589 on yearly</li> : null}
               </ul>
+              <button
+                type="button"
+                disabled={currentPlan === "basic" || processingPlan !== null}
+                onClick={() => void handleUpgrade("basic")}
+                className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
+              >
+                {currentPlan === "basic"
+                  ? "Current Plan"
+                  : processingPlan === "basic"
+                    ? "Processing..."
+                    : "Upgrade"}
+              </button>
             </div>
 
-            <div className="rounded-2xl border border-green-200 bg-white p-3 shadow-sm ring-2 ring-green-200">
+            <div
+              className={`rounded-2xl bg-white p-3 shadow-sm ${
+                currentPlan === "pro"
+                  ? "border border-green-200 ring-2 ring-green-200"
+                  : "border border-white ring-1 ring-zinc-100"
+              }`}
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <p className="font-bold text-zinc-900">Pro Plan</p>
                 <span className="rounded-full bg-[#16a34a] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
@@ -317,30 +434,60 @@ export default function MorePage() {
                 </span>
               </div>
               <p className="mt-1 text-sm font-extrabold text-[#16a34a]">
-                {billingCycle === "monthly" ? "₹399/month" : "₹3,499/year"}
+                {billingPeriod === "monthly" ? "₹399/month" : "₹3,499/year"}
               </p>
               <ul className="mt-2 space-y-1 text-sm text-zinc-700">
                 <li>• Everything in Basic</li>
                 <li>• AI smart suggestions</li>
                 <li>• Inventory management</li>
                 <li>• Reports & insights</li>
-                {billingCycle === "yearly" ? <li>• Save ₹1,289 on yearly</li> : null}
+                {billingPeriod === "yearly" ? <li>• Save ₹1,289 on yearly</li> : null}
               </ul>
+              <button
+                type="button"
+                disabled={currentPlan === "pro" || processingPlan !== null}
+                onClick={() => void handleUpgrade("pro")}
+                className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
+              >
+                {currentPlan === "pro"
+                  ? "Current Plan"
+                  : processingPlan === "pro"
+                    ? "Processing..."
+                    : "Upgrade"}
+              </button>
             </div>
 
-            <div className="rounded-2xl border border-white bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+            <div
+              className={`rounded-2xl bg-white p-3 shadow-sm ${
+                currentPlan === "business"
+                  ? "border border-green-200 ring-2 ring-green-200"
+                  : "border border-white ring-1 ring-zinc-100"
+              }`}
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <p className="font-bold text-zinc-900">Business Plan</p>
                 <p className="text-sm font-extrabold text-[#16a34a]">
-                  {billingCycle === "monthly" ? "₹699/month" : "₹5,999/year"}
+                  {billingPeriod === "monthly" ? "₹699/month" : "₹5,999/year"}
                 </p>
               </div>
               <ul className="mt-2 space-y-1 text-sm text-zinc-700">
                 <li>• Everything in Pro</li>
                 <li>• Multiple staff login</li>
                 <li>• Priority WhatsApp support</li>
-                {billingCycle === "yearly" ? <li>• Save ₹2,389 on yearly</li> : null}
+                {billingPeriod === "yearly" ? <li>• Save ₹2,389 on yearly</li> : null}
               </ul>
+              <button
+                type="button"
+                disabled={currentPlan === "business" || processingPlan !== null}
+                onClick={() => void handleUpgrade("business")}
+                className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
+              >
+                {currentPlan === "business"
+                  ? "Current Plan"
+                  : processingPlan === "business"
+                    ? "Processing..."
+                    : "Upgrade"}
+              </button>
             </div>
           </div>
         ) : null}
@@ -408,7 +555,10 @@ export default function MorePage() {
         type="button"
         className="min-h-14 w-full rounded-2xl border-2 border-red-500 bg-white text-base font-bold text-red-600 shadow-sm active:bg-red-50"
         onClick={() => {
-          /* logout placeholder */
+          void (async () => {
+            await supabase.auth.signOut();
+            window.location.href = "/login";
+          })();
         }}
       >
         Logout

@@ -1,10 +1,9 @@
 "use client";
 
 import { supabase } from "@/lib/supabase";
+import { useShopId } from "@/hooks/useShopId";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-
-const SHOP_ID = "shop001";
 
 const quickActions = [
   { href: "/billing", title: "New Bill", subtitle: "नया बिल", primary: true },
@@ -84,6 +83,7 @@ function mapBillRow(data: Record<string, unknown>): BillRow {
 }
 
 export default function Home() {
+  const { shopId, loading: shopIdLoading } = useShopId();
   const [loading, setLoading] = useState(true);
   const [aajKamai, setAajKamai] = useState(0);
   const [kulUdhar, setKulUdhar] = useState(0);
@@ -95,6 +95,7 @@ export default function Home() {
   const [insightsLoading, setInsightsLoading] = useState(false);
 
   const loadDashboard = useCallback(async () => {
+    if (!shopId) return;
     setLoading(true);
     try {
       const now = new Date();
@@ -116,32 +117,32 @@ export default function Home() {
         supabase
           .from("bills")
           .select("total")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .gte("created_at", todayIso),
         supabase
           .from("customers")
           .select("total_udhar")
-          .eq("shop_id", SHOP_ID),
+          .eq("shop_id", shopId),
         supabase
           .from("bills")
           .select("id")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .gte("created_at", todayIso),
         supabase
           .from("products")
           .select("id")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .lt("stock_qty", 5),
         supabase
           .from("bills")
           .select("*")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .order("created_at", { ascending: false })
           .limit(3),
         supabase
           .from("bills")
           .select("*")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .gte("created_at", start7Iso),
       ]);
 
@@ -178,11 +179,16 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [shopId]);
 
   useEffect(() => {
+    if (!shopIdLoading && !shopId) setLoading(false);
+  }, [shopId, shopIdLoading]);
+
+  useEffect(() => {
+    if (!shopId) return;
     void loadDashboard();
-  }, [loadDashboard]);
+  }, [loadDashboard, shopId]);
 
   useEffect(() => {
     if (loading) return;

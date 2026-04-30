@@ -1,9 +1,9 @@
 "use client";
 
+import { useShopId } from "@/hooks/useShopId";
 import { supabase } from "@/lib/supabase";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-const SHOP_ID = "shop001";
 const SHOP_DISPLAY_NAME = "Meri Dukan";
 
 type UdharTx = {
@@ -39,29 +39,8 @@ function buildReminderMessage(name: string, amount: number) {
   return `Namaste ${name} ji, aapka ShopSaathi se ${formatRupee(amount)} udhar baaki hai.\nKripya jald se jald dena. Dhanyawad! 🙏`;
 }
 
-function mapRowToCustomer(row: Record<string, unknown>): Customer {
-  const data = row;
-  const rawHistory = data.history;
-  const history: UdharTx[] = Array.isArray(rawHistory)
-    ? rawHistory.map((h: Record<string, unknown>, i: number) => ({
-        id: String(h.id ?? `h-${i}`),
-        date: String(h.date ?? ""),
-        note: String(h.note ?? ""),
-        delta: Number(h.delta ?? 0),
-      }))
-    : [];
-
-  return {
-    id: String(data.id ?? ""),
-    name: String(data.name ?? ""),
-    phone: String(data.phone ?? ""),
-    udhar: Number(data.total_udhar ?? 0),
-    lastDate: String(data.last_date ?? ""),
-    history,
-  };
-}
-
 export default function UdharPage() {
+  const { shopId, loading: shopIdLoading } = useShopId();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -77,12 +56,13 @@ export default function UdharPage() {
   );
 
   const loadCustomers = useCallback(async (silent = false) => {
+    if (!shopId) return;
     if (!silent) setLoading(true);
     try {
       const { data, error } = await supabase
         .from("customers")
         .select("*")
-        .eq("shop_id", "shop001")
+        .eq("shop_id", shopId)
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -109,11 +89,16 @@ export default function UdharPage() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [shopId]);
 
   useEffect(() => {
+    if (!shopIdLoading && !shopId) setLoading(false);
+  }, [shopId, shopIdLoading]);
+
+  useEffect(() => {
+    if (!shopId) return;
     void loadCustomers(false);
-  }, [loadCustomers]);
+  }, [loadCustomers, shopId]);
 
   const totalUdhar = useMemo(
     () => customers.reduce((s, c) => s + c.udhar, 0),
@@ -138,6 +123,7 @@ export default function UdharPage() {
   };
 
   const applyPayment = async (customerId: string) => {
+    if (!shopId) return;
     const raw = paymentAmount.replace(/[^\d.]/g, "");
     const paymentAmountNum = Math.round(parseFloat(raw) * 100) / 100;
     if (!Number.isFinite(paymentAmountNum) || paymentAmountNum <= 0) return;
@@ -165,7 +151,7 @@ export default function UdharPage() {
 
       // Save transaction
       const { error: txError } = await supabase.from("udhar_transactions").insert({
-        shop_id: "shop001",
+        shop_id: shopId,
         customer_id: customer.id,
         amount: paymentAmountNum,
         type: "payment",
@@ -217,6 +203,7 @@ export default function UdharPage() {
   };
 
   const saveNewCustomer = async () => {
+    if (!shopId) return;
     const name = newName.trim();
     const phone = newPhone.trim();
     if (!name || phone.replace(/\D/g, "").length < 10) return;
@@ -225,7 +212,7 @@ export default function UdharPage() {
       const { data: newCust, error } = await supabase
         .from("customers")
         .insert({
-          shop_id: "shop001",
+          shop_id: shopId,
           name: newName.trim(),
           phone: newPhone.trim(),
           total_udhar: Number(newUdhar) || 0,

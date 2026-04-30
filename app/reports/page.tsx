@@ -1,9 +1,8 @@
 "use client";
 
+import { useShopId } from "@/hooks/useShopId";
 import { supabase } from "@/lib/supabase";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-const SHOP_ID = "shop001";
 
 type Period = "today" | "week" | "month";
 
@@ -154,6 +153,7 @@ function BestBar({ value, max }: { value: number; max: number }) {
 }
 
 export default function ReportsPage() {
+  const { shopId, loading: shopIdLoading } = useShopId();
   const [period, setPeriod] = useState<Period>("today");
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState({
@@ -169,6 +169,7 @@ export default function ReportsPage() {
   const [topUdhar, setTopUdhar] = useState<UdharTop[]>([]);
 
   const loadReports = useCallback(async (p: Period) => {
+    if (!shopId) return;
     setLoading(true);
     const now = new Date();
     const { start, end } = periodRange(p, now);
@@ -180,19 +181,19 @@ export default function ReportsPage() {
         supabase
           .from("bills")
           .select("*")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .gte("created_at", startIso)
           .lte("created_at", endIso),
-        supabase.from("customers").select("*").eq("shop_id", SHOP_ID),
+        supabase.from("customers").select("*").eq("shop_id", shopId),
         supabase
           .from("udhar_transactions")
           .select("*")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .gte("created_at", startIso),
         supabase
           .from("bills")
           .select("*")
-          .eq("shop_id", SHOP_ID)
+          .eq("shop_id", shopId)
           .order("created_at", { ascending: false })
           .limit(5),
       ]);
@@ -308,11 +309,16 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [shopId]);
 
   useEffect(() => {
+    if (!shopIdLoading && !shopId) setLoading(false);
+  }, [shopId, shopIdLoading]);
+
+  useEffect(() => {
+    if (!shopId) return;
     void loadReports(period);
-  }, [period, loadReports]);
+  }, [period, loadReports, shopId]);
 
   const maxRevenue = useMemo(
     () =>

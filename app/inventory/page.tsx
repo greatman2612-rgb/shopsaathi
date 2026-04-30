@@ -1,9 +1,8 @@
 "use client";
 
+import { useShopId } from "@/hooks/useShopId";
 import { supabase } from "@/lib/supabase";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-const SHOP_ID = "shop001";
 
 type Product = {
   id: string;
@@ -69,6 +68,7 @@ function PencilIcon({ className }: { className?: string }) {
 }
 
 export default function InventoryPage() {
+  const { shopId, loading: shopIdLoading } = useShopId();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -89,18 +89,19 @@ export default function InventoryPage() {
 
   const loadProducts = useCallback(
     async (silent = false) => {
+      if (!shopId) return;
       if (!silent) setLoading(true);
       setError(null);
       try {
         let { data, error } = await supabase
           .from("products")
           .select("*")
-          .eq("shop_id", SHOP_ID);
+          .eq("shop_id", shopId);
         if (error) throw error;
         if ((data ?? []).length === 0) {
           for (const p of SEED_PRODUCTS) {
             const { error: insError } = await supabase.from("products").insert({
-              shop_id: SHOP_ID,
+              shop_id: shopId,
               name: p.name,
               price: p.price,
               stock_qty: p.qty,
@@ -112,7 +113,7 @@ export default function InventoryPage() {
           const r2 = await supabase
             .from("products")
             .select("*")
-            .eq("shop_id", SHOP_ID);
+            .eq("shop_id", shopId);
           data = r2.data ?? [];
         }
         const list = (data ?? []).map((row) =>
@@ -128,12 +129,17 @@ export default function InventoryPage() {
         if (!silent) setLoading(false);
       }
     },
-    [],
+    [shopId],
   );
 
   useEffect(() => {
+    if (!shopIdLoading && !shopId) setLoading(false);
+  }, [shopId, shopIdLoading]);
+
+  useEffect(() => {
+    if (!shopId) return;
     void loadProducts(false);
-  }, [loadProducts]);
+  }, [loadProducts, shopId]);
 
   const kamStockCount = useMemo(
     () => products.filter((p) => p.qty < 5).length,
@@ -163,7 +169,7 @@ export default function InventoryPage() {
   };
 
   const bumpEditQty = async (delta: number) => {
-    if (!editId) return;
+    if (!editId || !shopId) return;
     const n = parseInt(editQty, 10);
     const base = Number.isFinite(n) ? n : 0;
     const newQty = Math.max(0, base + delta);
@@ -191,7 +197,7 @@ export default function InventoryPage() {
   };
 
   const saveEdit = async () => {
-    if (!editId) return;
+    if (!editId || !shopId) return;
     const name = editName.trim();
     const price = Math.round(parseFloat(editPrice) * 100) / 100;
     const qty = Math.max(0, Math.floor(parseFloat(editQty)));
@@ -223,6 +229,7 @@ export default function InventoryPage() {
   };
 
   const saveAdd = async () => {
+    if (!shopId) return;
     const name = addName.trim();
     const price = Math.round(parseFloat(addPrice) * 100) / 100;
     const qty = Math.max(0, Math.floor(parseFloat(addQty)));
@@ -234,13 +241,13 @@ export default function InventoryPage() {
     setError(null);
     try {
       const { error } = await supabase.from("products").insert({
-          shop_id: SHOP_ID,
-          name,
-          price,
-          stock_qty: qty,
-          category,
-          created_at: new Date().toISOString(),
-        });
+        shop_id: shopId,
+        name,
+        price,
+        stock_qty: qty,
+        category,
+        created_at: new Date().toISOString(),
+      });
       if (error) throw error;
       await loadProducts(true);
       setAddName("");

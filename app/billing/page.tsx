@@ -1,9 +1,8 @@
 "use client";
 
+import { useShopId } from "@/hooks/useShopId";
 import { supabase } from "@/lib/supabase";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-const SHOP_ID = "shop001";
 
 type Product = {
   id: string;
@@ -47,42 +46,6 @@ function lineItemName(label: string) {
   return label.replace(/\s*₹[\d.]+\s*$/u, "").trim() || label;
 }
 
-type UdharHistoryRow = {
-  id: string;
-  date: string;
-  note: string;
-  delta: number;
-};
-
-async function findCustomerByName(name: string) {
-  const { data, error } = await supabase
-    .from("customers")
-    .select("*")
-    .eq("shop_id", SHOP_ID)
-    .ilike("name", name.trim())
-    .single();
-  if (error) {
-    if ((error as { code?: string }).code === "PGRST116") return null;
-    throw error;
-  }
-  if (!data) return null;
-  const row = data as Record<string, unknown>;
-  const rawHistory = row.history;
-  const history: UdharHistoryRow[] = Array.isArray(rawHistory)
-    ? rawHistory.map((h: Record<string, unknown>, i: number) => ({
-        id: String(h.id ?? `h-${i}`),
-        date: String(h.date ?? ""),
-        note: String(h.note ?? ""),
-        delta: Number(h.delta ?? 0),
-      }))
-    : [];
-  return {
-    id: String(row.id ?? ""),
-    total_udhar: Number(row.total_udhar ?? 0),
-    history,
-  };
-}
-
 type AiSuggestion = { name: string; price: number };
 
 function buildDbItems(snapshot: BillLine[]) {
@@ -94,6 +57,7 @@ function buildDbItems(snapshot: BillLine[]) {
 }
 
 async function persistBill(opts: {
+  shopId: string;
   isUdhar: boolean;
   linesSnapshot: BillLine[];
   grandTotal: number;
@@ -102,7 +66,7 @@ async function persistBill(opts: {
   customerId?: string;
 }) {
   const payload: Record<string, unknown> = {
-    shop_id: SHOP_ID,
+    shop_id: opts.shopId,
     items: buildDbItems(opts.linesSnapshot),
     total: opts.grandTotal,
     is_udhar: opts.isUdhar,
@@ -118,6 +82,7 @@ async function persistBill(opts: {
 }
 
 export default function BillingPage() {
+  const { shopId, loading: shopIdLoading } = useShopId();
   const [search, setSearch] = useState("");
   const [shopType, setShopType] = useState("general");
   const [aiSuggestions, setAiSuggestions] = useState<AiSuggestion[]>([]);
@@ -148,12 +113,13 @@ export default function BillingPage() {
   }, [search]);
 
   useEffect(() => {
+    if (!shopId) return;
     let cancelled = false;
     void (async () => {
       const { data, error } = await supabase
         .from("shops")
         .select("shop_type")
-        .eq("id", SHOP_ID)
+        .eq("id", shopId)
         .maybeSingle();
       if (cancelled) return;
       if (error) {
@@ -166,9 +132,10 @@ export default function BillingPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [shopId]);
 
   useEffect(() => {
+    if (!shopId) return;
     const q = search.trim();
     if (q.length < 2) {
       setAiSuggestions([]);
@@ -210,7 +177,7 @@ export default function BillingPage() {
       window.clearTimeout(timer);
       ac.abort();
     };
-  }, [search, shopType]);
+  }, [search, shopType, shopId]);
 
   const addAiSuggestionToBill = useCallback((s: AiSuggestion) => {
     const name = s.name.trim().slice(0, 120);
@@ -320,7 +287,7 @@ export default function BillingPage() {
   );
 
   const saveCashBill = async () => {
-    if (lines.length === 0) return;
+    if (lines.length === 0 || !shopId) return;
     const g = gstOn ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
     const t = Math.round((subtotal + g) * 100) / 100;
     const linesSnapshot = lines.map((l) => ({ ...l }));
@@ -329,6 +296,7 @@ export default function BillingPage() {
     setSaveError(null);
     try {
       await persistBill({
+        shopId,
         isUdhar: false,
         linesSnapshot,
         grandTotal: t,
@@ -350,6 +318,7 @@ export default function BillingPage() {
   };
 
   const saveUdharBill = async (customerName: string) => {
+    if (!shopId) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -365,7 +334,7 @@ export default function BillingPage() {
       const { data: existingCustomers } = await supabase
         .from("customers")
         .select("*")
-        .eq("shop_id", "shop001")
+        .eq("shop_id", shopId)
         .ilike("name", customerName.trim());
 
       let customerId = "";
@@ -390,7 +359,7 @@ export default function BillingPage() {
         const { data: newCustomer } = await supabase
           .from("customers")
           .insert({
-            shop_id: "shop001",
+            shop_id: shopId,
             name: customerName.trim(),
             phone: "",
             total_udhar: finalTotal,
@@ -407,7 +376,7 @@ export default function BillingPage() {
 
       // Step 2: Save udhar transaction
       await supabase.from("udhar_transactions").insert({
-        shop_id: "shop001",
+        shop_id: shopId,
         customer_id: customerId,
         amount: finalTotal,
         type: "credit",
@@ -417,7 +386,7 @@ export default function BillingPage() {
 
       // Step 3: Save bill
       await supabase.from("bills").insert({
-        shop_id: "shop001",
+        shop_id: shopId,
         customer_id: customerId,
         customer_name: customerName.trim(),
         items: billItems.map((i) => ({
@@ -527,6 +496,22 @@ export default function BillingPage() {
 
   const canSubmit = lines.length > 0 && !saving;
   const showSuggestions = search.trim().length > 0 && filtered.length > 0;
+
+  if (shopIdLoading) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-3 py-24"
+        role="status"
+        aria-live="polite"
+      >
+        <div
+          className="h-12 w-12 animate-spin rounded-full border-4 border-green-200 border-t-[#16a34a]"
+          aria-hidden
+        />
+        <p className="text-sm font-medium text-zinc-500">Loading…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4 pb-[calc(13rem+env(safe-area-inset-bottom))]">
