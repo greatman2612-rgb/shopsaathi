@@ -29,7 +29,6 @@ export default function MorePage() {
   const [ownerName, setOwnerName] = useState("Dukan Malik");
   const [phone, setPhone] = useState("98XXXXXXXX");
   const [editingProfile, setEditingProfile] = useState(false);
-  const [plansOpen, setPlansOpen] = useState(false);
   const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">(
     "monthly",
   );
@@ -332,68 +331,39 @@ export default function MorePage() {
           </li>
         </ul>
 
-        <button
-          type="button"
-          onClick={() => setPlansOpen((o) => !o)}
-          className="mt-4 flex min-h-12 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-[#16a34a] to-green-600 px-4 text-sm font-bold text-white shadow-md active:opacity-90"
-        >
-          Upgrade Karo 🚀
-        </button>
-
-        {plansOpen ? (
-          <div className="mt-4 space-y-3 rounded-2xl border border-green-100 bg-green-50/40 p-3">
-            <div className="mx-auto flex w-full max-w-xs rounded-full bg-white p-1 ring-1 ring-zinc-200">
-              <button
-                type="button"
-                onClick={() => setBillingPeriod("monthly")}
-                className={`min-h-10 flex-1 rounded-full px-3 text-xs font-bold uppercase tracking-wide transition ${
-                  billingPeriod === "monthly"
-                    ? "bg-[#16a34a] text-white"
-                    : "text-zinc-600"
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                type="button"
-                onClick={() => setBillingPeriod("yearly")}
-                className={`min-h-10 flex-1 rounded-full px-3 text-xs font-bold uppercase tracking-wide transition ${
-                  billingPeriod === "yearly"
-                    ? "bg-[#16a34a] text-white"
-                    : "text-zinc-600"
-                }`}
-              >
-                Yearly
-              </button>
-            </div>
-
-            <div
-              className={`rounded-2xl bg-white p-3 shadow-sm ${
-                currentPlan === "free"
-                  ? "border border-green-200 ring-2 ring-green-200"
-                  : "border border-white ring-1 ring-zinc-100"
+        <div className="mt-4 space-y-3 rounded-2xl border border-green-100 bg-green-50/40 p-3">
+          <div className="mx-auto flex w-full max-w-xs rounded-full bg-white p-1 ring-1 ring-zinc-200">
+            <button
+              type="button"
+              onClick={() => setBillingPeriod("monthly")}
+              className={`min-h-10 flex-1 rounded-full px-3 text-xs font-bold uppercase tracking-wide transition ${
+                billingPeriod === "monthly"
+                  ? "bg-[#16a34a] text-white"
+                  : "text-zinc-600"
               }`}
             >
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="font-bold text-zinc-900">Free Plan</p>
-                <p className="text-sm font-extrabold text-[#16a34a]">
-                  ₹0
-                </p>
-              </div>
-              <ul className="mt-2 space-y-1 text-sm text-zinc-700">
-                <li>• 30 bills/month</li>
-                <li>• Basic udhar tracking</li>
-                <li>• WhatsApp bill share</li>
-              </ul>
-            </div>
-
-            <div
-              className={`rounded-2xl bg-white p-3 shadow-sm ${
-                currentPlan === "basic"
-                  ? "border border-green-200 ring-2 ring-green-200"
-                  : "border border-white ring-1 ring-zinc-100"
+              Monthly
+            </button>
+            <button
+              type="button"
+              onClick={() => setBillingPeriod("yearly")}
+              className={`min-h-10 flex-1 rounded-full px-3 text-xs font-bold uppercase tracking-wide transition ${
+                billingPeriod === "yearly"
+                  ? "bg-[#16a34a] text-white"
+                  : "text-zinc-600"
               }`}
             >
+              Yearly
+            </button>
+          </div>
+
+          <div
+            className={`rounded-2xl bg-white p-3 shadow-sm ${
+              currentPlan === "basic"
+                ? "border border-green-200 ring-2 ring-green-200"
+                : "border border-white ring-1 ring-zinc-100"
+            }`}
+          >
               <div className="flex items-baseline justify-between gap-2">
                 <p className="font-bold text-zinc-900">Basic Plan</p>
                 <p className="text-sm font-extrabold text-[#16a34a]">
@@ -406,18 +376,20 @@ export default function MorePage() {
                 <li>• WhatsApp bill share</li>
                 {billingPeriod === "yearly" ? <li>• Save ₹589 on yearly</li> : null}
               </ul>
-              <button
-                type="button"
-                disabled={currentPlan === "basic" || processingPlan !== null}
-                onClick={() => void handleUpgrade("basic")}
-                className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
-              >
-                {currentPlan === "basic"
-                  ? "Current Plan"
-                  : processingPlan === "basic"
-                    ? "Processing..."
-                    : "Upgrade"}
-              </button>
+              {currentPlan === "basic" ? (
+                <div className="mt-3 inline-flex rounded-full bg-green-100 px-3 py-1 text-xs font-bold text-green-800">
+                  Current Plan ✓
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={processingPlan !== null}
+                  onClick={() => void handleUpgrade("basic")}
+                  className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
+                >
+                  {processingPlan === "basic" ? "Processing..." : "Upgrade Karo"}
+                </button>
+              )}
             </div>
 
             <div
@@ -443,18 +415,20 @@ export default function MorePage() {
                 <li>• Reports & insights</li>
                 {billingPeriod === "yearly" ? <li>• Save ₹1,289 on yearly</li> : null}
               </ul>
-              <button
-                type="button"
-                disabled={currentPlan === "pro" || processingPlan !== null}
-                onClick={() => void handleUpgrade("pro")}
-                className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
-              >
-                {currentPlan === "pro"
-                  ? "Current Plan"
-                  : processingPlan === "pro"
-                    ? "Processing..."
-                    : "Upgrade"}
-              </button>
+              {currentPlan === "pro" ? (
+                <div className="mt-3 inline-flex rounded-full bg-green-100 px-3 py-1 text-xs font-bold text-green-800">
+                  Current Plan ✓
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={processingPlan !== null}
+                  onClick={() => void handleUpgrade("pro")}
+                  className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
+                >
+                  {processingPlan === "pro" ? "Processing..." : "Upgrade Karo"}
+                </button>
+              )}
             </div>
 
             <div
@@ -476,21 +450,24 @@ export default function MorePage() {
                 <li>• Priority WhatsApp support</li>
                 {billingPeriod === "yearly" ? <li>• Save ₹2,389 on yearly</li> : null}
               </ul>
-              <button
-                type="button"
-                disabled={currentPlan === "business" || processingPlan !== null}
-                onClick={() => void handleUpgrade("business")}
-                className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
-              >
-                {currentPlan === "business"
-                  ? "Current Plan"
-                  : processingPlan === "business"
+              {currentPlan === "business" ? (
+                <div className="mt-3 inline-flex rounded-full bg-green-100 px-3 py-1 text-xs font-bold text-green-800">
+                  Current Plan ✓
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={processingPlan !== null}
+                  onClick={() => void handleUpgrade("business")}
+                  className="mt-3 min-h-11 w-full rounded-xl bg-[#16a34a] text-sm font-bold text-white disabled:opacity-40"
+                >
+                  {processingPlan === "business"
                     ? "Processing..."
-                    : "Upgrade"}
-              </button>
+                    : "Upgrade Karo"}
+                </button>
+              )}
             </div>
           </div>
-        ) : null}
       </section>
 
       <section>
