@@ -62,6 +62,9 @@ function newManualLineId() {
 
 type AiSuggestion = { name: string; price: number };
 
+/** Max catalogue rows before showing “add new” footer (more matches exist off-screen). */
+const SEARCH_RESULTS_CAP = 12;
+
 function buildDbItems(snapshot: BillLine[]) {
   return snapshot.map((l) => ({
     name: lineItemName(l.label),
@@ -139,6 +142,12 @@ export default function BillingPage() {
         normalize(p.label.replace(/₹\d+/, "")).includes(q),
     );
   }, [search, products]);
+
+  const visibleProducts = useMemo(
+    () => filtered.slice(0, SEARCH_RESULTS_CAP),
+    [filtered],
+  );
+  const hasHiddenMatches = filtered.length > SEARCH_RESULTS_CAP;
 
   useEffect(() => {
     if (!shopId) return;
@@ -267,6 +276,16 @@ export default function BillingPage() {
     setCustomQty("1");
     setSearch("");
   }, [customName, customPrice, customQty]);
+
+  const openQuickAddSheet = useCallback(() => {
+    const q = search.trim().slice(0, 120);
+    if (!q) return;
+    setCustomName(q);
+    setCustomPrice("");
+    setCustomQty("1");
+    setCustomItemOpen(true);
+    setSaveError(null);
+  }, [search]);
 
   const addAiSuggestionToBill = useCallback((s: AiSuggestion) => {
     const name = s.name.trim().slice(0, 120);
@@ -624,7 +643,10 @@ export default function BillingPage() {
   }
 
   const canSubmit = lines.length > 0 && !saving;
-  const showSuggestions = search.trim().length > 0 && filtered.length > 0;
+  const searchTrim = search.trim();
+  const showSearchDropdown = searchTrim.length > 0;
+  const quickAddDisplay =
+    searchTrim.length > 60 ? `${searchTrim.slice(0, 57)}…` : searchTrim;
 
   if (shopIdLoading) {
     return (
@@ -705,50 +727,67 @@ export default function BillingPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="min-h-14 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 text-base text-zinc-900 outline-none ring-0 placeholder:text-zinc-400 focus:border-[#16a34a] focus:bg-white focus:ring-2 focus:ring-[#16a34a]/25"
         />
-        {showSuggestions ? (
+        {showSearchDropdown ? (
           <ul
-            className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-2xl border border-zinc-200 bg-white py-1 shadow-lg"
+            className="absolute z-20 mt-1 flex max-h-72 w-full flex-col overflow-auto rounded-2xl border border-zinc-200 bg-white py-1 shadow-lg"
             role="listbox"
+            aria-label="Search results"
           >
-            {filtered.map((p) => (
-              <li key={p.id}>
+            {filtered.length === 0 ? (
+              <li>
                 <button
                   type="button"
                   role="option"
-                  className="flex min-h-12 w-full items-center px-4 text-left text-base text-zinc-900 active:bg-green-50"
-                  onClick={() => addProduct(p)}
+                  className="flex min-h-12 w-full items-center gap-2 px-4 text-left text-base text-zinc-900 active:bg-green-50"
+                  onClick={() => openQuickAddSheet()}
                 >
-                  {p.label}
+                  <span
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-50 text-lg font-bold leading-none text-[#16a34a] ring-1 ring-green-200"
+                    aria-hidden
+                  >
+                    +
+                  </span>
+                  <span className="min-w-0 flex-1 leading-snug text-zinc-900">
+                    <span className="font-medium text-zinc-800">
+                      {'"'}{quickAddDisplay}{'"'}
+                    </span>{" "}
+                    <span className="text-zinc-600">{t("searchAddBillSuffix")}</span>
+                  </span>
                 </button>
               </li>
-            ))}
+            ) : (
+              <>
+                {visibleProducts.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      role="option"
+                      className="flex min-h-12 w-full items-center px-4 text-left text-base text-zinc-900 active:bg-green-50"
+                      onClick={() => addProduct(p)}
+                    >
+                      {p.label}
+                    </button>
+                  </li>
+                ))}
+                {hasHiddenMatches ? (
+                  <li className="sticky bottom-0 border-t border-zinc-100 bg-white">
+                    <button
+                      type="button"
+                      className="flex min-h-12 w-full items-center px-4 text-left text-sm font-semibold text-[#16a34a] active:bg-green-50"
+                      onClick={() => openQuickAddSheet()}
+                    >
+                      {t("searchNotFoundAddFooter")}
+                    </button>
+                  </li>
+                ) : null}
+              </>
+            )}
           </ul>
         ) : null}
-        {search.trim().length > 0 && filtered.length === 0 ? (
-          <p className="mt-2 px-1 text-sm text-zinc-500">{t("noMatch")}</p>
-        ) : null}
         {search.trim().length === 0 && products.length === 0 ? (
-          <p className="mt-2 px-1 text-sm text-zinc-500">
-            {!limits.hasInventory ? t("emptyNoCatalogHint") : t("emptyInventoryHint")}
-          </p>
+          <p className="mt-2 px-1 text-sm text-zinc-500">{t("emptyInventoryHint")}</p>
         ) : null}
       </div>
-
-      {!limits.hasInventory ? (
-        <div className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-3 ring-1 ring-zinc-100">
-          <button
-            type="button"
-            onClick={() => {
-              setSaveError(null);
-              setCustomItemOpen(true);
-            }}
-            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 bg-white px-3 text-sm font-bold text-zinc-800 shadow-sm active:bg-green-50"
-          >
-            <span aria-hidden>➕</span>
-            {t("customItemBtn")}
-          </button>
-        </div>
-      ) : null}
 
       {limits.hasAI && search.trim().length >= 2 ? (
         <div className="rounded-2xl border border-green-100 bg-green-50/60 p-3 shadow-sm ring-1 ring-green-100/80">

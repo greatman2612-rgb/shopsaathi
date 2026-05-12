@@ -34,13 +34,10 @@ export const UI_STRINGS = {
     hi: "Apne products inventory mein add karo",
     en: "Add products in Stock first",
   },
-  emptyNoCatalogHint: {
-    hi: "Neeche \"Naya item\" se bina stock ke item daal sakte ho — naam, daam, ginti likho.",
-    en: 'Use "Add item" below — enter name, price, and quantity without saving to stock.',
-  },
-  customItemBtn: {
-    hi: "Naya item (stock / inventory ke bina)",
-    en: "Add item (not in stock)",
+  searchAddBillSuffix: { hi: "bill mein daalo", en: "add to bill" },
+  searchNotFoundAddFooter: {
+    hi: "Nahi mila? Naya add karo",
+    en: "Not listed? Add new",
   },
   customItemTitle: { hi: "Bill par naya item", en: "Add line to bill" },
   customItemSubtitle: {
