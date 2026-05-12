@@ -30,6 +30,8 @@ export default function MorePage() {
   );
   const [ownerName, setOwnerName] = useState("Dukan Malik");
   const [phone, setPhone] = useState("98XXXXXXXX");
+  const [shopAddress, setShopAddress] = useState("");
+  const [upiId, setUpiId] = useState("");
   const [editingProfile, setEditingProfile] = useState(false);
   const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">(
     "monthly",
@@ -63,6 +65,8 @@ export default function MorePage() {
         setShopName(String(row.shop_name ?? "Meri Dukan"));
         setOwnerName(String(row.owner_name ?? "Dukan Malik"));
         setPhone(String(row.phone ?? "98XXXXXXXX"));
+        setShopAddress(String(row.shop_address ?? ""));
+        setUpiId(String(row.upi_id ?? ""));
         const rawType = String(row.shop_type ?? "Kirana/General");
         setShopType(
           (SHOP_TYPE_OPTIONS as readonly string[]).includes(rawType)
@@ -82,6 +86,8 @@ export default function MorePage() {
         owner_name: "Dukan Malik",
         phone: "98XXXXXXXX",
         shop_type: "Kirana/General",
+        shop_address: "",
+        upi_id: "",
       });
       if (insertError) {
         console.error("create default shop failed:", insertError);
@@ -102,6 +108,8 @@ export default function MorePage() {
         owner_name: ownerName,
         phone,
         shop_type: shopType,
+        shop_address: shopAddress.trim(),
+        upi_id: upiId.trim(),
       });
       if (error) {
         console.error("save shop profile failed:", error);
@@ -297,6 +305,40 @@ export default function MorePage() {
                     ? "border-[#16a34a] bg-white ring-2 ring-[#16a34a]/20"
                     : "cursor-default border-transparent bg-zinc-50 text-zinc-800"
                 }`}
+              />
+            </label>
+            <label className="mt-2 block">
+              <span className="text-xs font-medium text-zinc-500">
+                Pata / Address (bill print)
+              </span>
+              <textarea
+                value={shopAddress}
+                onChange={(e) => setShopAddress(e.target.value)}
+                readOnly={!editingProfile}
+                rows={2}
+                className={`mt-1 min-h-[3rem] w-full resize-none rounded-xl border px-3 py-2 text-sm outline-none ${
+                  editingProfile
+                    ? "border-[#16a34a] bg-white ring-2 ring-[#16a34a]/20"
+                    : "cursor-default border-transparent bg-zinc-50 text-zinc-800"
+                }`}
+                placeholder="Shop ka full address"
+              />
+            </label>
+            <label className="mt-2 block">
+              <span className="text-xs font-medium text-zinc-500">
+                UPI ID (UPI QR bill par)
+              </span>
+              <input
+                value={upiId}
+                onChange={(e) => setUpiId(e.target.value)}
+                readOnly={!editingProfile}
+                inputMode="email"
+                className={`mt-1 min-h-12 w-full rounded-xl border px-3 text-base outline-none ${
+                  editingProfile
+                    ? "border-[#16a34a] bg-white ring-2 ring-[#16a34a]/20"
+                    : "cursor-default border-transparent bg-zinc-50 text-zinc-800"
+                }`}
+                placeholder="dukan@upi"
               />
             </label>
           </div>

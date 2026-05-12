@@ -20,6 +20,7 @@ type RawBill = {
   createdAt: Date | null;
   customerId?: string;
   customerName?: string;
+  paymentMode?: string;
 };
 
 type BillRow = {
@@ -80,6 +81,13 @@ function periodRange(period: Period, now = new Date()) {
   return { start, end };
 }
 
+function toYmdLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function inRange(d: Date | null, start: Date, end: Date) {
   if (!d) return false;
   const t = d.getTime();
@@ -124,6 +132,10 @@ function mapBillRow(data: Record<string, unknown>): RawBill {
       data.customer_id != null ? String(data.customer_id) : undefined,
     customerName:
       data.customer_name != null ? String(data.customer_name).trim() : undefined,
+    paymentMode:
+      data.payment_mode != null
+        ? String(data.payment_mode).toLowerCase().trim()
+        : "cash",
   };
 }
 
@@ -170,6 +182,19 @@ export default function ReportsPage() {
   const [udharPending, setUdharPending] = useState(0);
   const [udharRecovered, setUdharRecovered] = useState(0);
   const [topUdhar, setTopUdhar] = useState<UdharTop[]>([]);
+  const [pl, setPl] = useState({
+    revenue: 0,
+    purchaseCost: 0,
+    expenses: 0,
+    grossProfit: 0,
+    netProfit: 0,
+  });
+  const [payModes, setPayModes] = useState({
+    cash: 0,
+    upi: 0,
+    card: 0,
+    bank: 0,
+  });
 
   const loadReports = useCallback(async (p: Period) => {
     if (!shopId) return;
@@ -180,7 +205,10 @@ export default function ReportsPage() {
     try {
       const startIso = start.toISOString();
       const endIso = end.toISOString();
-      const [billsRes, customersRes, txRes, recentRes] = await Promise.all([
+      const startYmd = toYmdLocal(start);
+      const endYmd = toYmdLocal(end);
+      const [billsRes, customersRes, txRes, recentRes, purchasesRes, expensesRes] =
+        await Promise.all([
         supabase
           .from("bills")
           .select("*")
@@ -199,6 +227,18 @@ export default function ReportsPage() {
           .eq("shop_id", shopId)
           .order("created_at", { ascending: false })
           .limit(5),
+        supabase
+          .from("purchases")
+          .select("total_cost,created_at")
+          .eq("shop_id", shopId)
+          .gte("created_at", startIso)
+          .lte("created_at", endIso),
+        supabase
+          .from("expenses")
+          .select("amount,expense_date")
+          .eq("shop_id", shopId)
+          .gte("expense_date", startYmd)
+          .lte("expense_date", endYmd),
       ]);
 
       const periodBills = ((billsRes.data ?? []) as Record<string, unknown>[]).map(
@@ -218,6 +258,47 @@ export default function ReportsPage() {
         totalBills: periodBills.length,
         totalUdharDiya: Math.round(totalUdharDiya * 100) / 100,
         cashReceived: Math.round(cashReceived * 100) / 100,
+      });
+
+      let purchaseCost = 0;
+      for (const row of (purchasesRes.data ?? []) as Record<string, unknown>[]) {
+        purchaseCost += Number(row.total_cost ?? 0);
+      }
+      let expenseTotal = 0;
+      for (const row of (expensesRes.data ?? []) as Record<string, unknown>[]) {
+        expenseTotal += Number(row.amount ?? 0);
+      }
+      purchaseCost = Math.round(purchaseCost * 100) / 100;
+      expenseTotal = Math.round(expenseTotal * 100) / 100;
+      const revenue = Math.round(totalSales * 100) / 100;
+      const grossProfit = Math.round((revenue - purchaseCost) * 100) / 100;
+      const netProfit = Math.round((grossProfit - expenseTotal) * 100) / 100;
+      setPl({
+        revenue,
+        purchaseCost,
+        expenses: expenseTotal,
+        grossProfit,
+        netProfit,
+      });
+
+      let pcash = 0;
+      let pupi = 0;
+      let pcard = 0;
+      let pbank = 0;
+      for (const b of periodBills) {
+        if (b.is_udhar) continue;
+        const m = (b.paymentMode ?? "cash").toLowerCase();
+        const tot = b.total;
+        if (m === "upi") pupi += tot;
+        else if (m === "card") pcard += tot;
+        else if (m === "bank") pbank += tot;
+        else pcash += tot;
+      }
+      setPayModes({
+        cash: Math.round(pcash * 100) / 100,
+        upi: Math.round(pupi * 100) / 100,
+        card: Math.round(pcard * 100) / 100,
+        bank: Math.round(pbank * 100) / 100,
       });
 
       const agg = new Map<string, { units: number; revenue: number }>();
@@ -304,6 +385,14 @@ export default function ReportsPage() {
         totalUdharDiya: 0,
         cashReceived: 0,
       });
+      setPl({
+        revenue: 0,
+        purchaseCost: 0,
+        expenses: 0,
+        grossProfit: 0,
+        netProfit: 0,
+      });
+      setPayModes({ cash: 0, upi: 0, card: 0, bank: 0 });
       setBestSelling([]);
       setRecentBills([]);
       setUdharPending(0);
@@ -497,6 +586,113 @@ export default function ReportsPage() {
                 </>
               )}
         </div>
+      </section>
+
+      <section aria-label="Profit and loss">
+        <h2 className="text-base font-bold text-zinc-900">
+          Munafa / Nuksaan 💰
+        </h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          {periodLabel} — Total revenue, kharidi cost, kharch, aur net
+        </p>
+        {loading ? (
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div
+                key={i}
+                className="h-20 animate-pulse rounded-2xl bg-zinc-100"
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-col gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-zinc-100 bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+                <p className="text-xs font-semibold text-zinc-500">
+                  Total Revenue (bills)
+                </p>
+                <p className="mt-1 text-lg font-extrabold tabular-nums text-zinc-900">
+                  {formatRupee(pl.revenue)}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-zinc-100 bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+                <p className="text-xs font-semibold text-zinc-500">
+                  Kharidi / Stock-in cost
+                </p>
+                <p className="mt-1 text-lg font-extrabold tabular-nums text-orange-700">
+                  {formatRupee(pl.purchaseCost)}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-zinc-100 bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+                <p className="text-xs font-semibold text-zinc-500">
+                  Total Kharch (expenses)
+                </p>
+                <p className="mt-1 text-lg font-extrabold tabular-nums text-zinc-800">
+                  {formatRupee(pl.expenses)}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/80 p-3 shadow-sm ring-1 ring-amber-100">
+                <p className="text-xs font-semibold text-amber-900/80">
+                  Gross profit
+                </p>
+                <p className="mt-1 text-lg font-extrabold tabular-nums text-amber-950">
+                  {formatRupee(pl.grossProfit)}
+                </p>
+                <p className="mt-1 text-[10px] text-amber-900/70">
+                  Revenue − purchase cost
+                </p>
+              </div>
+            </div>
+            <div
+              className={`rounded-2xl border-2 p-4 shadow-sm ${
+                pl.netProfit >= 0
+                  ? "border-green-200 bg-green-50/90 ring-1 ring-green-100"
+                  : "border-red-200 bg-red-50/90 ring-1 ring-red-100"
+              }`}
+            >
+              <p className="text-xs font-bold uppercase tracking-wide text-zinc-600">
+                Net profit / loss
+              </p>
+              <p
+                className={`mt-1 text-2xl font-black tabular-nums ${
+                  pl.netProfit >= 0 ? "text-[#16a34a]" : "text-red-600"
+                }`}
+              >
+                {formatRupee(pl.netProfit)}
+              </p>
+              <p className="mt-1 text-xs text-zinc-600">
+                Gross profit − expenses
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm ring-1 ring-zinc-100">
+              <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                Cash bills — payment mode
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Sirf cash-type bills (udhar alag)
+              </p>
+              <ul className="mt-3 space-y-2 text-sm">
+                <li className="flex justify-between font-semibold text-zinc-800">
+                  <span>💵 Cash</span>
+                  <span className="tabular-nums">{formatRupee(payModes.cash)}</span>
+                </li>
+                <li className="flex justify-between font-semibold text-zinc-800">
+                  <span>📱 UPI</span>
+                  <span className="tabular-nums">{formatRupee(payModes.upi)}</span>
+                </li>
+                <li className="flex justify-between font-semibold text-zinc-800">
+                  <span>💳 Card</span>
+                  <span className="tabular-nums">{formatRupee(payModes.card)}</span>
+                </li>
+                <li className="flex justify-between font-semibold text-zinc-800">
+                  <span>🏦 Bank</span>
+                  <span className="tabular-nums">{formatRupee(payModes.bank)}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
       </section>
 
       <section>

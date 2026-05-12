@@ -15,6 +15,28 @@ type Product = {
   category: string;
 };
 
+const INVENTORY_CATEGORY_OPTIONS = [
+  "Grocery",
+  "Medical",
+  "Electronics",
+  "Clothing",
+  "Other",
+] as const;
+
+const CORE_CATEGORIES = new Set([
+  "Grocery",
+  "Medical",
+  "Electronics",
+  "Clothing",
+]);
+
+function productMatchesCategoryTab(p: Product, tab: string) {
+  if (tab === "All") return true;
+  const c = p.category.trim();
+  if (tab === "Other") return !CORE_CATEGORIES.has(c);
+  return c === tab;
+}
+
 function formatRupee(n: number) {
   return `₹${n % 1 === 0 ? n.toFixed(0) : n.toFixed(2)}`;
 }
@@ -79,7 +101,10 @@ export default function InventoryPage() {
   const [addName, setAddName] = useState("");
   const [addPrice, setAddPrice] = useState("");
   const [addQty, setAddQty] = useState("");
-  const [addCategory, setAddCategory] = useState("");
+  const [addCategory, setAddCategory] = useState<string>(
+    INVENTORY_CATEGORY_OPTIONS[0],
+  );
+  const [categoryTab, setCategoryTab] = useState<string>("All");
 
   const loadProducts = useCallback(
     async (silent = false) => {
@@ -122,11 +147,25 @@ export default function InventoryPage() {
     [products],
   );
 
+  const tabCounts = useMemo(() => {
+    const tabs = ["All", ...INVENTORY_CATEGORY_OPTIONS] as const;
+    const out: Record<string, number> = {};
+    for (const tab of tabs) {
+      out[tab] = products.filter((p) =>
+        productMatchesCategoryTab(p, tab),
+      ).length;
+    }
+    return out;
+  }, [products]);
+
   const filtered = useMemo(() => {
+    const byCat = products.filter((p) =>
+      productMatchesCategoryTab(p, categoryTab),
+    );
     const q = normalize(search);
-    if (!q) return products;
-    return products.filter((p) => normalize(p.name).includes(q));
-  }, [products, search]);
+    if (!q) return byCat;
+    return byCat.filter((p) => normalize(p.name).includes(q));
+  }, [products, search, categoryTab]);
 
   const openEdit = (p: Product) => {
     setEditId(p.id);
@@ -177,7 +216,13 @@ export default function InventoryPage() {
     const name = editName.trim();
     const price = Math.round(parseFloat(editPrice) * 100) / 100;
     const qty = Math.max(0, Math.floor(parseFloat(editQty)));
-    const category = editCategory.trim() || "General";
+    const category =
+      editCategory.trim() &&
+      (INVENTORY_CATEGORY_OPTIONS as readonly string[]).includes(
+        editCategory.trim(),
+      )
+        ? editCategory.trim()
+        : "Other";
     if (!name || !Number.isFinite(price) || price < 0 || !Number.isFinite(qty))
       return;
 
@@ -209,7 +254,13 @@ export default function InventoryPage() {
     const name = addName.trim();
     const price = Math.round(parseFloat(addPrice) * 100) / 100;
     const qty = Math.max(0, Math.floor(parseFloat(addQty)));
-    const category = addCategory.trim() || "General";
+    const category =
+      addCategory.trim() &&
+      (INVENTORY_CATEGORY_OPTIONS as readonly string[]).includes(
+        addCategory.trim(),
+      )
+        ? addCategory.trim()
+        : "Other";
     if (!name || !Number.isFinite(price) || price < 0 || !Number.isFinite(qty))
       return;
 
@@ -229,7 +280,7 @@ export default function InventoryPage() {
       setAddName("");
       setAddPrice("");
       setAddQty("");
-      setAddCategory("");
+      setAddCategory(INVENTORY_CATEGORY_OPTIONS[0]);
       setAddOpen(false);
     } catch (e) {
       console.error(e);
@@ -308,6 +359,40 @@ export default function InventoryPage() {
             </div>
           </section>
 
+          <div
+            className="-mx-1 flex gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            role="tablist"
+            aria-label="Category filter"
+          >
+            {(["All", ...INVENTORY_CATEGORY_OPTIONS] as const).map((tab) => {
+              const active = categoryTab === tab;
+              const count = tabCounts[tab] ?? 0;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setCategoryTab(tab)}
+                  className={`shrink-0 rounded-full px-3 py-2 text-xs font-bold transition ${
+                    active
+                      ? "bg-[#16a34a] text-white shadow-sm"
+                      : "bg-zinc-100 text-zinc-700 ring-1 ring-zinc-200/80"
+                  }`}
+                >
+                  {tab === "All" ? "All" : tab}{" "}
+                  <span
+                    className={
+                      active ? "text-white/90" : "text-zinc-500"
+                    }
+                  >
+                    ({count})
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           <label className="sr-only" htmlFor="inv-search">
             Product search
           </label>
@@ -333,7 +418,9 @@ export default function InventoryPage() {
               </div>
             ) : filtered.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-500">
-                Koi product nahi mila
+                {products.length === 0
+                  ? "Koi product nahi hai abhi."
+                  : "Is category mein koi product nahi — aur tab try karo."}
               </p>
             ) : (
               filtered.map((p) => {
@@ -455,6 +542,27 @@ export default function InventoryPage() {
                     inputMode="numeric"
                   />
                 </label>
+                <label className="mt-3 block text-sm font-semibold text-zinc-700">
+                  Category
+                  <select
+                    value={
+                      (INVENTORY_CATEGORY_OPTIONS as readonly string[]).includes(
+                        editCategory,
+                      )
+                        ? editCategory
+                        : "Other"
+                    }
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    disabled={savingEdit}
+                    className="mt-1 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20 disabled:opacity-50"
+                  >
+                    {INVENTORY_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
                 <p className="mt-4 text-xs font-bold uppercase tracking-wide text-zinc-500">
                   {t("decreaseStock")}
@@ -567,13 +675,18 @@ export default function InventoryPage() {
                 </label>
                 <label className="mt-3 block text-sm font-semibold text-zinc-700">
                   Category
-                  <input
+                  <select
                     value={addCategory}
                     onChange={(e) => setAddCategory(e.target.value)}
                     disabled={savingAdd}
                     className="mt-1 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20 disabled:opacity-50"
-                    placeholder="Grocery, Dairy..."
-                  />
+                  >
+                    {INVENTORY_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
                 </label>
 
                 <div className="mt-5 flex flex-col gap-2">

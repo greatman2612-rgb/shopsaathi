@@ -7,25 +7,32 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 const SHOP_DISPLAY_NAME = "Meri Dukan";
 
-type UdharTx = {
-  id: string;
-  date: string;
-  note: string;
-  /** Positive = udhar badha; negative = payment mila */
-  delta: number;
-};
-
 type Customer = {
   id: string;
   name: string;
   phone: string;
   udhar: number;
   lastDate: string;
-  history: UdharTx[];
 };
 
-function formatShortDate(d: Date) {
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+type LedgerEntry = {
+  id: string;
+  atLabel: string;
+  type: string;
+  amount: number;
+  note: string;
+  balanceAfter: number;
+};
+
+function formatLedgerTs(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 16);
+  return d.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatRupee(n: number) {
@@ -56,6 +63,14 @@ export default function UdharPage() {
   const [reminderGeneratingId, setReminderGeneratingId] = useState<string | null>(
     null,
   );
+  const [ledgerByCustomer, setLedgerByCustomer] = useState<
+    Record<string, LedgerEntry[]>
+  >({});
+  const [ledgerLoadingId, setLedgerLoadingId] = useState<string | null>(null);
+  const [udharBillCount, setUdharBillCount] = useState<Record<string, number>>(
+    {},
+  );
+  const [ledgerRefresh, setLedgerRefresh] = useState(0);
 
   const loadCustomers = useCallback(async (silent = false) => {
     if (!shopId) return;
@@ -80,7 +95,6 @@ export default function UdharPage() {
           phone: String(c.phone ?? ""),
           udhar: Number(c.total_udhar) || 0,
           lastDate: String(c.last_date ?? ""),
-          history: (c.history as UdharTx[]) || [],
         }),
       );
 
@@ -101,6 +115,63 @@ export default function UdharPage() {
     if (!shopId) return;
     void loadCustomers(false);
   }, [loadCustomers, shopId]);
+
+  useEffect(() => {
+    if (!shopId || !expandedId) return;
+    let cancelled = false;
+    setLedgerLoadingId(expandedId);
+    void (async () => {
+      try {
+        const [txRes, billsRes] = await Promise.all([
+          supabase
+            .from("udhar_transactions")
+            .select("*")
+            .eq("shop_id", shopId)
+            .eq("customer_id", expandedId)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("bills")
+            .select("*", { count: "exact", head: true })
+            .eq("shop_id", shopId)
+            .eq("customer_id", expandedId)
+            .eq("is_udhar", true),
+        ]);
+        if (cancelled) return;
+        const rows = (txRes.data ?? []) as Record<string, unknown>[];
+        let bal = 0;
+        const entries: LedgerEntry[] = rows.map((row) => {
+          const type = String(row.type ?? "").toLowerCase();
+          const amt = Number(row.amount ?? 0);
+          if (type === "payment") bal -= amt;
+          else bal += amt;
+          const created = String(row.created_at ?? "");
+          return {
+            id: String(row.id ?? ""),
+            atLabel: formatLedgerTs(created),
+            type,
+            amount: amt,
+            note: String(row.note ?? ""),
+            balanceAfter: Math.round(bal * 100) / 100,
+          };
+        });
+        setLedgerByCustomer((prev) => ({ ...prev, [expandedId]: entries }));
+        setUdharBillCount((prev) => ({
+          ...prev,
+          [expandedId]: billsRes.count ?? 0,
+        }));
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          setLedgerByCustomer((prev) => ({ ...prev, [expandedId]: [] }));
+        }
+      } finally {
+        if (!cancelled) setLedgerLoadingId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shopId, expandedId, ledgerRefresh]);
 
   const totalUdhar = useMemo(
     () => customers.reduce((s, c) => s + c.udhar, 0),
@@ -141,7 +212,7 @@ export default function UdharPage() {
       const { error: updateError } = await supabase
         .from("customers")
         .update({
-          total_udhar: Math.max(0, customer.udhar - paymentAmountNum),
+          total_udhar: Math.max(0, customer.udhar - pay),
           last_date: new Date().toLocaleDateString("en-IN", {
             day: "numeric",
             month: "short",
@@ -155,7 +226,7 @@ export default function UdharPage() {
       const { error: txError } = await supabase.from("udhar_transactions").insert({
         shop_id: shopId,
         customer_id: customer.id,
-        amount: paymentAmountNum,
+        amount: pay,
         type: "payment",
         note: "Payment liya",
         created_at: new Date().toISOString(),
@@ -164,6 +235,7 @@ export default function UdharPage() {
       if (txError) throw txError;
 
       await loadCustomers(true);
+      setLedgerRefresh((x) => x + 1);
     } catch (e) {
       console.error(e);
     }
@@ -202,6 +274,35 @@ export default function UdharPage() {
         ? `https://wa.me/91${digits}?text=${encodeURIComponent(text)}`
         : `https://wa.me/?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const shareLedger = (c: Customer) => {
+    const rows = ledgerByCustomer[c.id] ?? [];
+    const n = udharBillCount[c.id] ?? 0;
+    const lines = rows.map((e) => {
+      const label =
+        e.type === "payment"
+          ? "Payment"
+          : e.type === "credit"
+            ? "Credit / Udhar"
+            : e.type;
+      return `${e.atLabel} | ${label} | ${formatRupee(e.amount)} | balance ${formatRupee(e.balanceAfter)}${e.note ? ` | ${e.note}` : ""}`;
+    });
+    const text = [
+      `ShopSaathi — Ledger: ${c.name}`,
+      `Udhar bills (count): ${n}`,
+      `Abhi baaki: ${formatRupee(c.udhar)}`,
+      "",
+      "Puri history:",
+      lines.length ? lines.join("\n") : "—",
+      "",
+      "Dhanyawad.",
+    ].join("\n");
+    window.open(
+      `https://wa.me/?text=${encodeURIComponent(text)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
   };
 
   const saveNewCustomer = async () => {
@@ -333,34 +434,84 @@ export default function UdharPage() {
 
                     {open ? (
                       <div className="border-t border-zinc-100 bg-zinc-50/80 px-4 pb-4 pt-3">
-                        <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500">
-                          Haal ka hisaab
-                        </h3>
-                        <ul className="mt-2 space-y-2">
-                          {c.history.map((t) => (
-                            <li
-                              key={t.id}
-                              className="flex items-start justify-between gap-2 rounded-xl bg-white px-3 py-2.5 text-sm ring-1 ring-zinc-100"
-                            >
-                              <div className="min-w-0">
-                                <p className="font-medium text-zinc-900">
-                                  {t.note}
-                                </p>
-                                <p className="text-xs text-zinc-500">{t.date}</p>
-                              </div>
-                              <span
-                                className={`shrink-0 text-sm font-bold tabular-nums ${
-                                  t.delta >= 0
-                                    ? "text-red-600"
-                                    : "text-[#16a34a]"
-                                }`}
-                              >
-                                {t.delta >= 0 ? "+" : ""}
-                                {formatRupee(t.delta)}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                            Poora ledger
+                          </h3>
+                          <p className="text-xs font-semibold text-zinc-600">
+                            Udhar bills:{" "}
+                            <span className="tabular-nums text-zinc-900">
+                              {udharBillCount[c.id] ?? "—"}
+                            </span>
+                          </p>
+                        </div>
+                        {ledgerLoadingId === c.id ? (
+                          <p className="mt-3 text-center text-sm text-zinc-500">
+                            Loading history…
+                          </p>
+                        ) : (
+                          <div className="mt-2 overflow-x-auto rounded-xl ring-1 ring-zinc-200/80">
+                            <table className="w-full min-w-[280px] text-left text-xs">
+                              <thead className="bg-zinc-100/90 text-[10px] font-bold uppercase text-zinc-500">
+                                <tr>
+                                  <th className="px-2 py-2">Date</th>
+                                  <th className="px-2 py-2">Type</th>
+                                  <th className="px-2 py-2 text-right">Amt</th>
+                                  <th className="px-2 py-2 text-right">Balance</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(ledgerByCustomer[c.id] ?? []).length === 0 ? (
+                                  <tr>
+                                    <td
+                                      colSpan={4}
+                                      className="px-2 py-4 text-center text-zinc-500"
+                                    >
+                                      Koi transaction nahi
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  (ledgerByCustomer[c.id] ?? []).map((e) => (
+                                    <tr
+                                      key={e.id}
+                                      className="border-t border-zinc-100 bg-white"
+                                    >
+                                      <td className="px-2 py-2 align-top text-zinc-700">
+                                        <div>{e.atLabel}</div>
+                                        {e.note ? (
+                                          <div className="mt-0.5 max-w-[8rem] text-[10px] leading-snug text-zinc-500">
+                                            {e.note}
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                      <td className="px-2 py-2 align-top font-semibold capitalize text-zinc-800">
+                                        {e.type === "payment"
+                                          ? "Payment"
+                                          : e.type === "credit"
+                                            ? "Credit"
+                                            : e.type}
+                                      </td>
+                                      <td className="px-2 py-2 align-top text-right font-bold tabular-nums text-zinc-900">
+                                        {formatRupee(e.amount)}
+                                      </td>
+                                      <td className="px-2 py-2 align-top text-right font-bold tabular-nums text-red-700">
+                                        {formatRupee(e.balanceAfter)}
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          className="mt-3 flex min-h-12 w-full items-center justify-center rounded-2xl border-2 border-[#16a34a] bg-white text-sm font-bold text-[#16a34a] active:bg-green-50"
+                          onClick={() => shareLedger(c)}
+                        >
+                          Download / Share Ledger (WhatsApp)
+                        </button>
 
                         {paymentForId === c.id ? (
                           <div className="mt-3 rounded-2xl border border-zinc-200 bg-white p-3">

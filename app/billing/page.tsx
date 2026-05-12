@@ -5,7 +5,9 @@ import { useShopId } from "@/hooks/useShopId";
 import { usePlan } from "@/hooks/usePlan";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { allocateNextBillNumber } from "@/lib/allocateBillNumber";
+import { buildUpiQrImageUrl } from "@/lib/upiQr";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Product = {
   id: string;
@@ -23,6 +25,25 @@ type BillLine = {
 };
 
 type PaymentKind = "cash" | "udhar";
+type CashPaymentMode = "cash" | "upi" | "card" | "bank";
+
+type DoneBillState = {
+  payment: PaymentKind;
+  isEstimate: boolean;
+  billNumber: string | null;
+  lines: BillLine[];
+  subtotal: number;
+  discountAmount: number;
+  afterDiscount: number;
+  gstAmount: number;
+  total: number;
+  gstApplied: boolean;
+  paymentMode: string | null;
+  shopName: string;
+  shopPhone: string;
+  shopAddress: string;
+  upiId: string | null;
+};
 
 function formatShortDate(d: Date) {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -79,6 +100,8 @@ async function persistBill(opts: {
   linesSnapshot: BillLine[];
   grandTotal: number;
   gstApplied: boolean;
+  billNumber: string;
+  paymentMode?: string | null;
   customerName?: string;
   customerId?: string;
 }) {
@@ -89,7 +112,10 @@ async function persistBill(opts: {
     is_udhar: opts.isUdhar,
     gst_applied: opts.gstApplied,
     created_at: new Date().toISOString(),
+    bill_number: opts.billNumber,
   };
+  if (opts.paymentMode != null && opts.paymentMode !== "")
+    payload.payment_mode = opts.paymentMode;
   if (opts.isUdhar && opts.customerName) {
     payload.customer_name = opts.customerName;
     if (opts.customerId) payload.customer_id = opts.customerId;
@@ -113,15 +139,10 @@ export default function BillingPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [udharModalOpen, setUdharModalOpen] = useState(false);
   const [udharCustomerName, setUdharCustomerName] = useState("");
-  const [done, setDone] = useState<{
-    payment: PaymentKind;
-    lines: BillLine[];
-    subtotal: number;
-    discountAmount: number;
-    afterDiscount: number;
-    gstAmount: number;
-    total: number;
-  } | null>(null);
+  const [done, setDone] = useState<DoneBillState | null>(null);
+  const [cashPaymentModalOpen, setCashPaymentModalOpen] = useState(false);
+  const [cashModalIntent, setCashModalIntent] = useState<"new" | "convert">("new");
+  const estimateConvertRef = useRef<DoneBillState | null>(null);
   const [discountInput, setDiscountInput] = useState("");
   const [rateEditor, setRateEditor] = useState<{
     productId: string;
@@ -390,66 +411,221 @@ export default function BillingPage() {
     setCustomName("");
     setCustomPrice("");
     setCustomQty("1");
+    setCashPaymentModalOpen(false);
+    setCashModalIntent("new");
+    estimateConvertRef.current = null;
   }, []);
 
   const buildWhatsAppText = useCallback(
-    (snapshot: BillLine[], grandTotal: number, discountRupee?: number) => {
+    (opts: {
+      snapshot: BillLine[];
+      grandTotal: number;
+      discountRupee?: number;
+      billNumber?: string | null;
+      upiId?: string | null;
+      isEstimate?: boolean;
+    }) => {
+      const {
+        snapshot,
+        grandTotal,
+        discountRupee,
+        billNumber,
+        upiId,
+        isEstimate,
+      } = opts;
       const itemParts = snapshot.map((l) => {
         const nameOnly = lineItemName(l.label);
         return `${nameOnly} x${l.qty}`;
       });
-      const linesOut = [
-        "ShopSaathi Bill",
-        `Items: ${itemParts.join(", ")}`,
-      ];
+      const head = isEstimate
+        ? "ShopSaathi Estimate (not a bill)"
+        : "ShopSaathi Bill";
+      const linesOut = [head];
+      if (billNumber) linesOut.push(`Bill No: ${billNumber}`);
+      linesOut.push(`Items: ${itemParts.join(", ")}`);
       if (discountRupee != null && discountRupee > 0) {
         linesOut.push(`Discount: ${formatRupee(discountRupee)}`);
       }
-      linesOut.push(`Total: ${formatRupee(grandTotal)}`, "Thank you!");
+      linesOut.push(`Total: ${formatRupee(grandTotal)}`);
+      if (upiId && upiId.trim()) linesOut.push(`UPI: ${upiId.trim()}`);
+      linesOut.push("Thank you!");
       return linesOut.join("\n");
     },
     [],
   );
 
   const openWhatsApp = useCallback(
-    (snapshot: BillLine[], grandTotal: number, discountRupee?: number) => {
-      const text = buildWhatsAppText(snapshot, grandTotal, discountRupee);
+    (opts: {
+      snapshot: BillLine[];
+      grandTotal: number;
+      discountRupee?: number;
+      billNumber?: string | null;
+      upiId?: string | null;
+      isEstimate?: boolean;
+    }) => {
+      const text = buildWhatsAppText(opts);
       const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
       window.open(url, "_blank", "noopener,noreferrer");
     },
     [buildWhatsAppText],
   );
 
-  const saveCashBill = async () => {
-    if (lines.length === 0 || !shopId) return;
-    const linesSnapshot = lines.map((l) => ({ ...l }));
+  const fetchShopMeta = useCallback(async () => {
+    if (!shopId) return null;
+    const { data } = await supabase
+      .from("shops")
+      .select("upi_id, shop_name, phone, shop_address")
+      .eq("id", shopId)
+      .maybeSingle();
+    const row = data as Record<string, unknown> | null;
+    return {
+      shopName: String(row?.shop_name ?? "Shop"),
+      shopPhone: String(row?.phone ?? ""),
+      shopAddress: String(row?.shop_address ?? ""),
+      upiId: String(row?.upi_id ?? "").trim() || null,
+    };
+  }, [shopId]);
 
-    setSaving(true);
+  const showEstimateSuccess = useCallback(async () => {
+    if (lines.length === 0 || !shopId) return;
+    const meta = await fetchShopMeta();
+    if (!meta) return;
+    const linesSnapshot = lines.map((l) => ({ ...l }));
+    setDone({
+      isEstimate: true,
+      billNumber: null,
+      payment: "cash",
+      paymentMode: null,
+      lines: linesSnapshot,
+      subtotal,
+      discountAmount,
+      afterDiscount,
+      gstAmount,
+      total,
+      gstApplied: gstOn,
+      ...meta,
+    });
+  }, [
+    lines,
+    shopId,
+    subtotal,
+    discountAmount,
+    afterDiscount,
+    gstAmount,
+    total,
+    gstOn,
+    fetchShopMeta,
+  ]);
+
+  const startCashBillFlow = useCallback(() => {
     setSaveError(null);
-    try {
-      await persistBill({
-        shopId,
-        isUdhar: false,
-        linesSnapshot,
-        grandTotal: total,
-        gstApplied: gstOn,
-      });
-      setDone({
-        payment: "cash",
-        lines: linesSnapshot,
-        subtotal,
-        discountAmount,
-        afterDiscount,
-        gstAmount,
-        total,
-      });
-    } catch (e) {
-      console.error(e);
-      setSaveError(t("saveFailed"));
-    } finally {
-      setSaving(false);
-    }
-  };
+    setCashModalIntent("new");
+    setCashPaymentModalOpen(true);
+  }, []);
+
+  const confirmCashPayment = useCallback(
+    async (mode: CashPaymentMode) => {
+      if (lines.length === 0 || !shopId) return;
+      const linesSnapshot = lines.map((l) => ({ ...l }));
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const billNumber = await allocateNextBillNumber(supabase, shopId);
+        await persistBill({
+          shopId,
+          isUdhar: false,
+          linesSnapshot,
+          grandTotal: total,
+          gstApplied: gstOn,
+          billNumber,
+          paymentMode: mode,
+        });
+        const meta = await fetchShopMeta();
+        setCashPaymentModalOpen(false);
+        setDone({
+          isEstimate: false,
+          billNumber,
+          payment: "cash",
+          paymentMode: mode,
+          lines: linesSnapshot,
+          subtotal,
+          discountAmount,
+          afterDiscount,
+          gstAmount,
+          total,
+          gstApplied: gstOn,
+          shopName: meta?.shopName ?? "Shop",
+          shopPhone: meta?.shopPhone ?? "",
+          shopAddress: meta?.shopAddress ?? "",
+          upiId: meta?.upiId ?? null,
+        });
+      } catch (e) {
+        console.error(e);
+        setSaveError(t("saveFailed"));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [
+      lines,
+      shopId,
+      total,
+      gstOn,
+      subtotal,
+      discountAmount,
+      afterDiscount,
+      gstAmount,
+      fetchShopMeta,
+      t,
+    ],
+  );
+
+  const startConvertEstimateFlow = useCallback(() => {
+    if (!done?.isEstimate) return;
+    estimateConvertRef.current = done;
+    setCashModalIntent("convert");
+    setCashPaymentModalOpen(true);
+  }, [done]);
+
+  const confirmConvertEstimate = useCallback(
+    async (mode: CashPaymentMode) => {
+      const snap = estimateConvertRef.current;
+      if (!snap || !shopId) return;
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const billNumber = await allocateNextBillNumber(supabase, shopId);
+        await persistBill({
+          shopId,
+          isUdhar: false,
+          linesSnapshot: snap.lines,
+          grandTotal: snap.total,
+          gstApplied: snap.gstApplied,
+          billNumber,
+          paymentMode: mode,
+        });
+        const meta = await fetchShopMeta();
+        estimateConvertRef.current = null;
+        setCashPaymentModalOpen(false);
+        setDone({
+          ...snap,
+          isEstimate: false,
+          billNumber,
+          paymentMode: mode,
+          shopName: meta?.shopName ?? snap.shopName,
+          shopPhone: meta?.shopPhone ?? snap.shopPhone,
+          shopAddress: meta?.shopAddress ?? snap.shopAddress,
+          upiId: meta?.upiId ?? snap.upiId,
+        });
+      } catch (e) {
+        console.error(e);
+        setSaveError(t("saveFailed"));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [shopId, fetchShopMeta, t],
+  );
 
   const saveUdharBill = async (customerName: string) => {
     if (!shopId) return;
@@ -463,6 +639,8 @@ export default function BillingPage() {
         price: i.unitPrice,
         qty: i.qty,
       }));
+
+      const billNumber = await allocateNextBillNumber(supabase, shopId);
 
       const { data: existingCustomers } = await supabase
         .from("customers")
@@ -531,18 +709,29 @@ export default function BillingPage() {
         is_udhar: true,
         gst_applied: gstOn,
         created_at: new Date().toISOString(),
+        bill_number: billNumber,
+        payment_mode: "udhar",
       });
 
+      const meta = await fetchShopMeta();
       setUdharModalOpen(false);
       setUdharCustomerName("");
       setDone({
         payment: "udhar",
+        isEstimate: false,
+        billNumber,
         lines: linesSnapshot,
         subtotal,
         discountAmount,
         afterDiscount,
         gstAmount,
         total: billTotal,
+        gstApplied: gstOn,
+        paymentMode: "udhar",
+        shopName: meta?.shopName ?? "Shop",
+        shopPhone: meta?.shopPhone ?? "",
+        shopAddress: meta?.shopAddress ?? "",
+        upiId: meta?.upiId ?? null,
       });
     } catch (e: any) {
       console.error("saveUdharBill error:", e);
@@ -553,23 +742,63 @@ export default function BillingPage() {
   };
 
   if (done) {
-    const payLabel =
-      done.payment === "cash" ? t("doneCash") : t("doneUdhar");
+    const payLabel = done.isEstimate
+      ? "Estimate (bill save nahi hua)"
+      : done.payment === "cash"
+        ? t("doneCash")
+        : t("doneUdhar");
+    const paymentBadge =
+      done.payment === "cash" && done.paymentMode
+        ? {
+            cash: "💵 Cash",
+            upi: "📱 UPI",
+            card: "💳 Card",
+            bank: "🏦 Bank",
+          }[done.paymentMode] ?? done.paymentMode
+        : null;
+    const qrUrl =
+      done.upiId && done.upiId.trim()
+        ? buildUpiQrImageUrl(
+            done.upiId.trim(),
+            done.total,
+            done.isEstimate ? "ShopSaathi Estimate" : "ShopSaathi Bill",
+          )
+        : null;
+    const billDate = formatShortDate(new Date());
 
     return (
-      <div className="flex flex-col gap-5 pb-6">
+      <>
+        <div className="no-print flex flex-col gap-5 pb-6">
         <h1 className="text-lg font-bold text-zinc-900">{t("billingSlash")}</h1>
 
         <div
-          className="rounded-2xl border border-green-100 bg-green-50/80 p-4 shadow-sm ring-1 ring-green-100"
+          className="relative overflow-hidden rounded-2xl border border-green-100 bg-green-50/80 p-4 shadow-sm ring-1 ring-green-100"
           role="status"
         >
+          {done.isEstimate ? (
+            <p
+              className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center text-4xl font-black uppercase tracking-widest text-zinc-400/25"
+              aria-hidden
+            >
+              ESTIMATE
+            </p>
+          ) : null}
           <p className="text-center text-lg font-bold text-[#16a34a]">
             {t("doneTitle")}
           </p>
           <p className="mt-1 text-center text-sm text-zinc-600">{payLabel}</p>
+          {done.billNumber ? (
+            <p className="mt-2 text-center text-sm font-bold text-zinc-800">
+              Bill No: {done.billNumber}
+            </p>
+          ) : null}
+          {paymentBadge ? (
+            <p className="mt-1 text-center text-xs font-semibold text-zinc-600">
+              Payment: {paymentBadge}
+            </p>
+          ) : null}
 
-          <ul className="mt-4 space-y-2 border-t border-green-100/80 pt-3 text-sm text-zinc-800">
+          <ul className="relative z-[1] mt-4 space-y-2 border-t border-green-100/80 pt-3 text-sm text-zinc-800">
             {done.lines.map((l) => (
               <li
                 key={l.productId}
@@ -585,7 +814,7 @@ export default function BillingPage() {
             ))}
           </ul>
 
-          <div className="mt-3 space-y-1 border-t border-green-100/80 pt-3 text-sm">
+          <div className="relative z-[1] mt-3 space-y-1 border-t border-green-100/80 pt-3 text-sm">
             <div className="flex justify-between text-zinc-600">
               <span>{t("subtotal")}</span>
               <span className="tabular-nums">{formatRupee(done.subtotal)}</span>
@@ -617,18 +846,59 @@ export default function BillingPage() {
               </span>
             </div>
           </div>
+
+          {qrUrl ? (
+            <div className="relative z-[1] mt-4 flex flex-col items-center border-t border-green-100/80 pt-4">
+              <img
+                src={qrUrl}
+                alt="UPI QR"
+                width={150}
+                height={150}
+                className="rounded-xl border border-zinc-200 bg-white p-1"
+              />
+              <p className="mt-2 text-center text-sm font-semibold text-zinc-700">
+                UPI se payment karo
+              </p>
+              {done.upiId ? (
+                <p className="text-xs text-zinc-500">{done.upiId}</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-3">
+          {done.isEstimate ? (
+            <button
+              type="button"
+              onClick={() => startConvertEstimateFlow()}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border-2 border-[#16a34a] bg-white text-base font-bold text-[#16a34a] shadow-sm active:bg-green-50"
+            >
+              Convert to Bill
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() =>
-              openWhatsApp(done.lines, done.total, done.discountAmount)
+              openWhatsApp({
+                snapshot: done.lines,
+                grandTotal: done.total,
+                discountRupee: done.discountAmount,
+                billNumber: done.billNumber,
+                upiId: done.upiId,
+                isEstimate: done.isEstimate,
+              })
             }
             className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white text-base font-semibold text-zinc-900 shadow-sm active:bg-zinc-50"
           >
             <span aria-hidden>📲</span>
             {t("whatsappShare")}
+          </button>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white text-base font-semibold text-zinc-900 shadow-sm active:bg-zinc-50"
+          >
+            PDF Download karo
           </button>
           <button
             type="button"
@@ -638,7 +908,57 @@ export default function BillingPage() {
             {t("newBill")}
           </button>
         </div>
-      </div>
+        </div>
+
+        <div id="printable-bill" className="printable-bill">
+          <div className="bill-print-header">
+            <h2 className="text-xl font-bold">{done.shopName}</h2>
+            {done.shopAddress ? <p className="text-sm">{done.shopAddress}</p> : null}
+            <p className="text-sm">Phone: {done.shopPhone || "—"}</p>
+            <p className="mt-2 text-sm">
+              {done.isEstimate ? "ESTIMATE" : "TAX INVOICE"} ·{" "}
+              {done.billNumber ?? "—"} · {billDate}
+            </p>
+          </div>
+          <table className="bill-print-table mt-4 w-full text-left text-sm">
+            <thead>
+              <tr>
+                <th className="border-b py-1">Item</th>
+                <th className="border-b py-1">Qty</th>
+                <th className="border-b py-1">Rate</th>
+                <th className="border-b py-1 text-right">Amt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {done.lines.map((l) => (
+                <tr key={l.productId}>
+                  <td className="py-1 pr-2">{lineItemName(l.label)}</td>
+                  <td className="py-1">{l.qty}</td>
+                  <td className="py-1">{formatRupee(l.unitPrice)}</td>
+                  <td className="py-1 text-right tabular-nums">
+                    {formatRupee(l.unitPrice * l.qty)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-3 space-y-1 text-sm">
+            <p>Subtotal: {formatRupee(done.subtotal)}</p>
+            {done.discountAmount > 0 ? (
+              <p>Discount: −{formatRupee(done.discountAmount)}</p>
+            ) : null}
+            {done.gstAmount > 0 ? <p>GST 18%: {formatRupee(done.gstAmount)}</p> : null}
+            <p className="text-lg font-bold">Total: {formatRupee(done.total)}</p>
+          </div>
+          {qrUrl ? (
+            <div className="mt-4 text-center">
+              <img src={qrUrl} alt="" width={120} height={120} className="mx-auto" />
+              <p className="text-xs">UPI: {done.upiId}</p>
+            </div>
+          ) : null}
+          <p className="mt-6 text-center text-sm">Thank you!</p>
+        </div>
+      </>
     );
   }
 
@@ -966,15 +1286,15 @@ export default function BillingPage() {
             </p>
           ) : null}
 
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <button
               type="button"
               disabled={!canSubmit}
-              onClick={() => void saveCashBill()}
+              onClick={() => startCashBillFlow()}
               className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#16a34a] text-base font-bold text-white shadow-md active:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <span aria-hidden>💵</span>
-              {saving && !udharModalOpen ? t("saving") : t("cashBill")}
+              {saving && cashPaymentModalOpen ? t("saving") : t("cashBill")}
             </button>
             <button
               type="button"
@@ -989,9 +1309,87 @@ export default function BillingPage() {
               <span aria-hidden>📒</span>
               {t("udharBill")}
             </button>
+            <button
+              type="button"
+              disabled={!canSubmit || saving}
+              onClick={() => void showEstimateSuccess()}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border-2 border-[#16a34a] bg-white text-base font-bold text-[#16a34a] shadow-sm active:bg-green-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span aria-hidden>📋</span>
+              Estimate Banao
+            </button>
           </div>
         </div>
       </div>
+
+      {cashPaymentModalOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col justify-end bg-black/45"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cash-payment-title"
+        >
+          <button
+            type="button"
+            className="min-h-12 flex-1"
+            aria-label="Close"
+            disabled={saving}
+            onClick={() => {
+              if (!saving) {
+                setCashPaymentModalOpen(false);
+                setCashModalIntent("new");
+              }
+            }}
+          />
+          <div className="rounded-t-3xl bg-white px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2 shadow-2xl">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-zinc-200" />
+            <h2
+              id="cash-payment-title"
+              className="text-lg font-bold text-zinc-900"
+            >
+              Payment mode chuno
+            </h2>
+            <p className="text-sm text-zinc-500">
+              Cash bill ke liye — kaise pay hua?
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {(
+                [
+                  ["cash", "💵 Cash"],
+                  ["upi", "📱 UPI"],
+                  ["card", "💳 Card"],
+                  ["bank", "🏦 Bank Transfer"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    void (cashModalIntent === "convert"
+                      ? confirmConvertEstimate(mode)
+                      : confirmCashPayment(mode))
+                  }
+                  className="min-h-14 rounded-2xl border-2 border-zinc-200 bg-zinc-50 text-sm font-bold text-zinc-800 active:bg-green-50 disabled:opacity-40"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setCashPaymentModalOpen(false);
+                setCashModalIntent("new");
+              }}
+              className="mt-3 min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100"
+            >
+              {t("cancel")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {udharModalOpen ? (
         <div

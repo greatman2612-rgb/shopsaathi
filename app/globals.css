@@ -24,3 +24,35 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Print: PDF bill — hide app chrome, show only #printable-bill */
+.printable-bill {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 100%;
+  max-width: 480px;
+  padding: 1rem;
+  background: #fff;
+  color: #111;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #printable-bill,
+  #printable-bill * {
+    visibility: visible !important;
+  }
+  #printable-bill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+  }
+}

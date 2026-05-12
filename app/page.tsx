@@ -261,6 +261,12 @@ export default function Home() {
         subtitle: t("qaReportsSub"),
         primary: false as const,
       },
+      {
+        href: "/more",
+        title: "More / Settings",
+        subtitle: "प्रोफाइल · भाषा",
+        primary: false as const,
+      },
     ],
     [t],
   );
