@@ -1,7 +1,10 @@
 "use client";
 
+import { useLocale } from "@/contexts/LocaleContext";
 import { useShopId } from "@/hooks/useShopId";
+import { usePlan } from "@/hooks/usePlan";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Product = {
@@ -11,15 +14,6 @@ type Product = {
   name: string;
   price: number;
 };
-
-const SAMPLE_PRODUCTS: Product[] = [
-  { id: "p1", label: "Parle-G 50g ₹5", name: "Parle-G 50g", price: 5 },
-  { id: "p2", label: "Tata Salt 1kg ₹22", name: "Tata Salt 1kg", price: 22 },
-  { id: "p3", label: "Surf Excel ₹45", name: "Surf Excel", price: 45 },
-  { id: "p4", label: "Maggi 70g ₹14", name: "Maggi 70g", price: 14 },
-  { id: "p5", label: "Amul Butter 100g ₹55", name: "Amul Butter 100g", price: 55 },
-  { id: "p6", label: "Colgate ₹40", name: "Colgate", price: 40 },
-];
 
 type BillLine = {
   productId: string;
@@ -44,6 +38,19 @@ function normalize(s: string) {
 
 function lineItemName(label: string) {
   return label.replace(/\s*₹[\d.]+\s*$/u, "").trim() || label;
+}
+
+function labelWithPrice(name: string, unitPrice: number) {
+  const p = Math.round(unitPrice * 100) / 100;
+  const rupeePart = p % 1 === 0 ? p.toFixed(0) : p.toFixed(2);
+  return `${name.trim()} ₹${rupeePart}`;
+}
+
+function newAiLineId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `ai:${crypto.randomUUID()}`;
+  }
+  return `ai:${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 type AiSuggestion = { name: string; price: number };
@@ -82,7 +89,10 @@ async function persistBill(opts: {
 }
 
 export default function BillingPage() {
+  const { t } = useLocale();
   const { shopId, loading: shopIdLoading } = useShopId();
+  const { plan, limits, billsThisMonth, canMakeBill } = usePlan();
+  const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [shopType, setShopType] = useState("general");
   const [aiSuggestions, setAiSuggestions] = useState<AiSuggestion[]>([]);
@@ -97,20 +107,27 @@ export default function BillingPage() {
     payment: PaymentKind;
     lines: BillLine[];
     subtotal: number;
+    discountAmount: number;
+    afterDiscount: number;
     gstAmount: number;
     total: number;
+  } | null>(null);
+  const [discountInput, setDiscountInput] = useState("");
+  const [rateEditor, setRateEditor] = useState<{
+    productId: string;
+    draft: string;
   } | null>(null);
 
   const filtered = useMemo(() => {
     const q = normalize(search);
     if (!q) return [];
-    return SAMPLE_PRODUCTS.filter(
+    return products.filter(
       (p) =>
         normalize(p.name).includes(q) ||
         normalize(p.label).includes(q) ||
         normalize(p.label.replace(/₹\d+/, "")).includes(q),
     );
-  }, [search]);
+  }, [search, products]);
 
   useEffect(() => {
     if (!shopId) return;
@@ -136,6 +153,44 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (!shopId) return;
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("products")
+        .select("id, name, price")
+        .eq("shop_id", shopId)
+        .order("name", { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        console.error("load billing products failed:", error);
+        setProducts([]);
+        return;
+      }
+      const mapped = ((data as Record<string, unknown>[] | null) ?? []).map((row) => {
+        const id = String(row.id ?? "");
+        const name = String(row.name ?? "").trim();
+        const price = Number(row.price ?? 0);
+        const displayPrice = price % 1 === 0 ? price.toFixed(0) : price.toFixed(2);
+        return {
+          id,
+          name,
+          price,
+          label: `${name} ₹${displayPrice}`,
+        };
+      });
+      setProducts(
+        mapped.filter(
+          (p) => p.id && p.name && Number.isFinite(p.price) && p.price >= 0,
+        ),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shopId]);
+
+  useEffect(() => {
+    if (!shopId || !limits.hasAI) return;
     const q = search.trim();
     if (q.length < 2) {
       setAiSuggestions([]);
@@ -177,37 +232,23 @@ export default function BillingPage() {
       window.clearTimeout(timer);
       ac.abort();
     };
-  }, [search, shopType, shopId]);
+  }, [search, shopType, shopId, limits.hasAI]);
 
   const addAiSuggestionToBill = useCallback((s: AiSuggestion) => {
     const name = s.name.trim().slice(0, 120);
     const price = Math.round(s.price * 100) / 100;
     if (!name || !Number.isFinite(price) || price < 0) return;
-    const rupeePart = price % 1 === 0 ? price.toFixed(0) : price.toFixed(2);
-    const id = `ai:${normalize(name)}:${price}`;
-    const product: Product = {
-      id,
-      name,
-      price,
-      label: `${name} ₹${rupeePart}`,
-    };
-    setLines((prev) => {
-      const i = prev.findIndex((l) => l.productId === id);
-      if (i >= 0) {
-        const next = [...prev];
-        next[i] = { ...next[i], qty: next[i].qty + 1 };
-        return next;
-      }
-      return [
-        ...prev,
-        {
-          productId: id,
-          label: product.label,
-          unitPrice: price,
-          qty: 1,
-        },
-      ];
-    });
+    const id = newAiLineId();
+    const label = labelWithPrice(name, price);
+    setLines((prev) => [
+      ...prev,
+      {
+        productId: id,
+        label,
+        unitPrice: price,
+        qty: 1,
+      },
+    ]);
     setSearch("");
   }, []);
 
@@ -216,8 +257,39 @@ export default function BillingPage() {
     [lines],
   );
 
-  const gstAmount = gstOn ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
-  const total = Math.round((subtotal + gstAmount) * 100) / 100;
+  const parsedDiscount = useMemo(() => {
+    const raw = discountInput.replace(/[^\d.]/g, "");
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.round(n * 100) / 100;
+  }, [discountInput]);
+
+  const discountAmount = useMemo(
+    () => Math.min(parsedDiscount, subtotal),
+    [parsedDiscount, subtotal],
+  );
+
+  const afterDiscount = useMemo(
+    () => Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100),
+    [subtotal, discountAmount],
+  );
+
+  const gstAmount = gstOn
+    ? Math.round(afterDiscount * 0.18 * 100) / 100
+    : 0;
+  const total = Math.round((afterDiscount + gstAmount) * 100) / 100;
+
+  const updateLineUnitPrice = useCallback((productId: string, unitPrice: number) => {
+    const p = Math.round(unitPrice * 100) / 100;
+    if (!Number.isFinite(p) || p < 0) return;
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.productId !== productId) return l;
+        const name = lineItemName(l.label);
+        return { ...l, unitPrice: p, label: labelWithPrice(name, p) };
+      }),
+    );
+  }, []);
 
   const addProduct = useCallback((p: Product) => {
     setLines((prev) => {
@@ -259,27 +331,32 @@ export default function BillingPage() {
     setSearch("");
     setGstOn(false);
     setSaveError(null);
+    setDiscountInput("");
+    setRateEditor(null);
   }, []);
 
   const buildWhatsAppText = useCallback(
-    (snapshot: BillLine[], grandTotal: number) => {
+    (snapshot: BillLine[], grandTotal: number, discountRupee?: number) => {
       const itemParts = snapshot.map((l) => {
         const nameOnly = lineItemName(l.label);
         return `${nameOnly} x${l.qty}`;
       });
-      return [
+      const linesOut = [
         "ShopSaathi Bill",
         `Items: ${itemParts.join(", ")}`,
-        `Total: ${formatRupee(grandTotal)}`,
-        "Thank you!",
-      ].join("\n");
+      ];
+      if (discountRupee != null && discountRupee > 0) {
+        linesOut.push(`Discount: ${formatRupee(discountRupee)}`);
+      }
+      linesOut.push(`Total: ${formatRupee(grandTotal)}`, "Thank you!");
+      return linesOut.join("\n");
     },
     [],
   );
 
   const openWhatsApp = useCallback(
-    (snapshot: BillLine[], grandTotal: number) => {
-      const text = buildWhatsAppText(snapshot, grandTotal);
+    (snapshot: BillLine[], grandTotal: number, discountRupee?: number) => {
+      const text = buildWhatsAppText(snapshot, grandTotal, discountRupee);
       const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
       window.open(url, "_blank", "noopener,noreferrer");
     },
@@ -288,8 +365,6 @@ export default function BillingPage() {
 
   const saveCashBill = async () => {
     if (lines.length === 0 || !shopId) return;
-    const g = gstOn ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
-    const t = Math.round((subtotal + g) * 100) / 100;
     const linesSnapshot = lines.map((l) => ({ ...l }));
 
     setSaving(true);
@@ -299,19 +374,21 @@ export default function BillingPage() {
         shopId,
         isUdhar: false,
         linesSnapshot,
-        grandTotal: t,
+        grandTotal: total,
         gstApplied: gstOn,
       });
       setDone({
         payment: "cash",
         lines: linesSnapshot,
         subtotal,
-        gstAmount: g,
-        total: t,
+        discountAmount,
+        afterDiscount,
+        gstAmount,
+        total,
       });
     } catch (e) {
       console.error(e);
-      setSaveError("Save nahi ho paya — dubara try karo.");
+      setSaveError(t("saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -322,15 +399,14 @@ export default function BillingPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      const finalTotal = gstOn ? Math.round(subtotal * 1.18) : subtotal;
       const linesSnapshot = lines.map((l) => ({ ...l }));
+      const billTotal = total;
       const billItems = linesSnapshot.map((i) => ({
         label: i.label,
         price: i.unitPrice,
         qty: i.qty,
       }));
 
-      // Step 1: Check if customer exists
       const { data: existingCustomers } = await supabase
         .from("customers")
         .select("*")
@@ -343,7 +419,7 @@ export default function BillingPage() {
         // Customer exists - update their udhar
         const customer = existingCustomers[0] as Record<string, unknown>;
         customerId = String(customer.id ?? "");
-        const newUdhar = Number(customer.total_udhar) + finalTotal;
+        const newUdhar = Number(customer.total_udhar) + billTotal;
         await supabase
           .from("customers")
           .update({
@@ -362,7 +438,7 @@ export default function BillingPage() {
             shop_id: shopId,
             name: customerName.trim(),
             phone: "",
-            total_udhar: finalTotal,
+            total_udhar: billTotal,
             last_date: new Date().toLocaleDateString("en-IN", {
               day: "numeric",
               month: "short",
@@ -378,7 +454,7 @@ export default function BillingPage() {
       await supabase.from("udhar_transactions").insert({
         shop_id: shopId,
         customer_id: customerId,
-        amount: finalTotal,
+        amount: billTotal,
         type: "credit",
         note: "Bill udhar",
         created_at: new Date().toISOString(),
@@ -394,7 +470,7 @@ export default function BillingPage() {
           price: i.price,
           qty: i.qty,
         })),
-        total: finalTotal,
+        total: billTotal,
         is_udhar: true,
         gst_applied: gstOn,
         created_at: new Date().toISOString(),
@@ -402,17 +478,18 @@ export default function BillingPage() {
 
       setUdharModalOpen(false);
       setUdharCustomerName("");
-      const g = gstOn ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
       setDone({
         payment: "udhar",
         lines: linesSnapshot,
         subtotal,
-        gstAmount: g,
-        total: finalTotal,
+        discountAmount,
+        afterDiscount,
+        gstAmount,
+        total: billTotal,
       });
     } catch (e: any) {
       console.error("saveUdharBill error:", e);
-      setSaveError("Save nahi ho paya - dubara try karo.");
+      setSaveError(t("saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -420,18 +497,18 @@ export default function BillingPage() {
 
   if (done) {
     const payLabel =
-      done.payment === "cash" ? "Cash bill" : "Udhar mein daala gaya";
+      done.payment === "cash" ? t("doneCash") : t("doneUdhar");
 
     return (
       <div className="flex flex-col gap-5 pb-6">
-        <h1 className="text-lg font-bold text-zinc-900">Billing / बिलिंग</h1>
+        <h1 className="text-lg font-bold text-zinc-900">{t("billingSlash")}</h1>
 
         <div
           className="rounded-2xl border border-green-100 bg-green-50/80 p-4 shadow-sm ring-1 ring-green-100"
           role="status"
         >
           <p className="text-center text-lg font-bold text-[#16a34a]">
-            Ho gaya ✓
+            {t("doneTitle")}
           </p>
           <p className="mt-1 text-center text-sm text-zinc-600">{payLabel}</p>
 
@@ -453,19 +530,31 @@ export default function BillingPage() {
 
           <div className="mt-3 space-y-1 border-t border-green-100/80 pt-3 text-sm">
             <div className="flex justify-between text-zinc-600">
-              <span>Subtotal</span>
+              <span>{t("subtotal")}</span>
               <span className="tabular-nums">{formatRupee(done.subtotal)}</span>
             </div>
+            {done.discountAmount > 0 ? (
+              <div className="flex justify-between text-zinc-600">
+                <span>{t("discountLine")}</span>
+                <span className="tabular-nums">−{formatRupee(done.discountAmount)}</span>
+              </div>
+            ) : null}
+            {done.discountAmount > 0 ? (
+              <div className="flex justify-between text-zinc-500 text-xs">
+                <span>{t("afterDiscount")}</span>
+                <span className="tabular-nums">{formatRupee(done.afterDiscount)}</span>
+              </div>
+            ) : null}
             {done.gstAmount > 0 ? (
               <div className="flex justify-between text-zinc-600">
-                <span>GST 18%</span>
+                <span>{t("gstLine")}</span>
                 <span className="tabular-nums">
                   {formatRupee(done.gstAmount)}
                 </span>
               </div>
             ) : null}
             <div className="flex justify-between text-base font-bold text-zinc-900">
-              <span>Kul Total</span>
+              <span>{t("finalTotal")}</span>
               <span className="tabular-nums text-[#16a34a]">
                 {formatRupee(done.total)}
               </span>
@@ -476,18 +565,20 @@ export default function BillingPage() {
         <div className="flex flex-col gap-3">
           <button
             type="button"
-            onClick={() => openWhatsApp(done.lines, done.total)}
+            onClick={() =>
+              openWhatsApp(done.lines, done.total, done.discountAmount)
+            }
             className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white text-base font-semibold text-zinc-900 shadow-sm active:bg-zinc-50"
           >
             <span aria-hidden>📲</span>
-            WhatsApp par bhejo
+            {t("whatsappShare")}
           </button>
           <button
             type="button"
             onClick={resetBill}
             className="flex min-h-14 w-full items-center justify-center rounded-2xl bg-[#16a34a] text-base font-bold text-white shadow-md active:bg-green-700"
           >
-            Naya Bill
+            {t("newBill")}
           </button>
         </div>
       </div>
@@ -508,19 +599,50 @@ export default function BillingPage() {
           className="h-12 w-12 animate-spin rounded-full border-4 border-green-200 border-t-[#16a34a]"
           aria-hidden
         />
-        <p className="text-sm font-medium text-zinc-500">Loading…</p>
+        <p className="text-sm font-medium text-zinc-500">{t("loading")}</p>
+      </div>
+    );
+  }
+
+  if (!canMakeBill) {
+    return (
+      <div className="flex min-h-[75dvh] flex-col items-center justify-center gap-4 rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-6 text-center shadow-sm">
+        <p className="text-lg font-extrabold text-red-700">
+          {t("planLimitTitle")}
+        </p>
+        <p className="text-sm font-medium leading-relaxed text-orange-900/80">
+          {t("planLimitBody")}
+        </p>
+        <Link
+          href="/more"
+          className="inline-flex min-h-12 items-center justify-center rounded-2xl bg-[#16a34a] px-5 text-sm font-bold text-white shadow-md active:bg-green-700"
+        >
+          {t("upgrade")}
+        </Link>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4 pb-[calc(13rem+env(safe-area-inset-bottom))]">
+    <div className="flex flex-col gap-4 pb-[calc(17rem+env(safe-area-inset-bottom))]">
       <header className="flex items-start justify-between gap-2">
         <div>
-          <h1 className="text-xl font-bold text-zinc-900">Naya Bill</h1>
-          <p className="text-sm text-zinc-500">ShopSaathi — fast billing</p>
+          <h1 className="text-xl font-bold text-zinc-900">{t("billingHeading")}</h1>
+          <p className="text-sm text-zinc-500">{t("billingSub")}</p>
         </div>
       </header>
+
+      {plan === "free" ? (
+        <div
+          className={`rounded-xl border px-3 py-2 text-sm font-semibold ${
+            billsThisMonth > 20
+              ? "border-orange-300 bg-orange-50 text-orange-800"
+              : "border-green-200 bg-green-50 text-green-800"
+          }`}
+        >
+          {t("freePlanBanner")} {billsThisMonth}/30 {t("billsUsedSuffix")}
+        </div>
+      ) : null}
 
       {saveError ? (
         <p
@@ -540,7 +662,7 @@ export default function BillingPage() {
           type="search"
           inputMode="search"
           autoComplete="off"
-          placeholder="Item ka naam likho..."
+          placeholder={t("searchPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="min-h-14 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 text-base text-zinc-900 outline-none ring-0 placeholder:text-zinc-400 focus:border-[#16a34a] focus:bg-white focus:ring-2 focus:ring-[#16a34a]/25"
@@ -565,17 +687,18 @@ export default function BillingPage() {
           </ul>
         ) : null}
         {search.trim().length > 0 && filtered.length === 0 ? (
-          <p className="mt-2 px-1 text-sm text-zinc-500">
-            Koi item nahi mila — naam check karo
-          </p>
+          <p className="mt-2 px-1 text-sm text-zinc-500">{t("noMatch")}</p>
+        ) : null}
+        {search.trim().length === 0 && products.length === 0 ? (
+          <p className="mt-2 px-1 text-sm text-zinc-500">{t("emptyInventoryHint")}</p>
         ) : null}
       </div>
 
-      {search.trim().length >= 2 ? (
+      {limits.hasAI && search.trim().length >= 2 ? (
         <div className="rounded-2xl border border-green-100 bg-green-50/60 p-3 shadow-sm ring-1 ring-green-100/80">
           <div className="mb-2 flex items-center gap-2">
             <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-[#16a34a] ring-1 ring-green-200">
-              ✨ AI
+              ✨ {t("aiBadge")}
             </span>
             {aiSuggestLoading ? (
               <span className="flex items-center gap-1" aria-live="polite">
@@ -612,14 +735,16 @@ export default function BillingPage() {
             id="bill-items-heading"
             className="text-sm font-semibold uppercase tracking-wide text-zinc-500"
           >
-            Bill items
+            {t("billItems")}
           </h2>
-          <span className="text-xs text-zinc-400">{lines.length} lines</span>
+          <span className="text-xs text-zinc-400">
+            {lines.length} {t("linesCount")}
+          </span>
         </div>
 
         {lines.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 px-4 py-10 text-center text-sm text-zinc-500">
-            Upar se item chuno — yahan list dikhegi
+            {t("emptyCart")}
           </div>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -638,9 +763,23 @@ export default function BillingPage() {
                       type="button"
                       onClick={() => removeLine(l.productId)}
                       className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-full text-lg text-zinc-400 hover:bg-red-50 hover:text-red-600 active:bg-red-100"
-                      aria-label="Remove item"
+                      aria-label={t("removeItem")}
                     >
                       ✕
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRateEditor({
+                          productId: l.productId,
+                          draft: String(l.unitPrice),
+                        })
+                      }
+                      className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-bold text-zinc-800 active:bg-green-50"
+                    >
+                      {t("editRate")}
                     </button>
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3">
@@ -649,7 +788,7 @@ export default function BillingPage() {
                         type="button"
                         className="flex h-12 min-w-12 items-center justify-center rounded-full bg-white text-2xl font-semibold leading-none text-zinc-800 shadow-sm active:scale-95"
                         onClick={() => setQty(l.productId, l.qty - 1)}
-                        aria-label="Decrease quantity"
+                        aria-label={t("decreaseQty")}
                       >
                         −
                       </button>
@@ -660,7 +799,7 @@ export default function BillingPage() {
                         type="button"
                         className="flex h-12 min-w-12 items-center justify-center rounded-full bg-white text-2xl font-semibold leading-none text-zinc-800 shadow-sm active:scale-95"
                         onClick={() => setQty(l.productId, l.qty + 1)}
-                        aria-label="Increase quantity"
+                        aria-label={t("increaseQty")}
                       >
                         +
                       </button>
@@ -690,7 +829,7 @@ export default function BillingPage() {
         <div className="rounded-2xl border border-zinc-200 bg-white/95 p-3 shadow-[0_-4px_24px_rgba(0,0,0,0.08)] backdrop-blur-sm">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 pb-3">
             <span className="text-base font-bold text-zinc-900">
-              Kul Total:{" "}
+              {t("grandTotal")}:{" "}
               <span className="tabular-nums text-[#16a34a]">
                 {formatRupee(total)}
               </span>
@@ -703,13 +842,32 @@ export default function BillingPage() {
                 disabled={saving}
                 className="h-5 w-5 accent-[#16a34a]"
               />
-              +18% GST
+              {t("gstCheckbox")}
             </label>
           </div>
           {gstOn ? (
             <p className="mt-2 text-xs text-zinc-500">
-              GST: {formatRupee(gstAmount)} · Without GST:{" "}
-              {formatRupee(subtotal)}
+              {t("gstBreakdown")}: {formatRupee(gstAmount)} · {t("afterDiscount")}:{" "}
+              {formatRupee(afterDiscount)}
+            </p>
+          ) : null}
+
+          <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-zinc-500">
+            {t("discountLabel")}
+            <input
+              type="text"
+              inputMode="decimal"
+              value={discountInput}
+              onChange={(e) => setDiscountInput(e.target.value)}
+              disabled={saving}
+              placeholder="0"
+              className="mt-1 min-h-12 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 text-base font-semibold tabular-nums outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20 disabled:opacity-50"
+            />
+          </label>
+          <p className="mt-1 text-[11px] text-zinc-400">{t("discountHint")}</p>
+          {discountAmount > 0 ? (
+            <p className="mt-1 text-xs font-medium text-zinc-600">
+              {t("afterDiscount")}: {formatRupee(afterDiscount)}
             </p>
           ) : null}
 
@@ -721,7 +879,7 @@ export default function BillingPage() {
               className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#16a34a] text-base font-bold text-white shadow-md active:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <span aria-hidden>💵</span>
-              {saving && !udharModalOpen ? "Saving…" : "Cash Bill Karo"}
+              {saving && !udharModalOpen ? t("saving") : t("cashBill")}
             </button>
             <button
               type="button"
@@ -734,7 +892,7 @@ export default function BillingPage() {
               className="flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-orange-500 text-base font-bold text-white shadow-md active:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <span aria-hidden>📒</span>
-              Udhar Mein Daalo
+              {t("udharBill")}
             </button>
           </div>
         </div>
@@ -765,16 +923,16 @@ export default function BillingPage() {
               id="udhar-customer-title"
               className="text-lg font-bold text-zinc-900"
             >
-              Customer ka naam
+              {t("udharCustomerTitle")}
             </h2>
-            <p className="text-sm text-zinc-500">Udhar bill ke liye</p>
+            <p className="text-sm text-zinc-500">{t("udharCustomerSub")}</p>
             <label className="mt-4 block text-sm font-semibold text-zinc-700">
-              Naam
+              {t("nameLabel")}
               <input
                 value={udharCustomerName}
                 onChange={(e) => setUdharCustomerName(e.target.value)}
                 className="mt-1 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
-                placeholder="Jaise: Ramesh Verma"
+                placeholder={t("udharPlaceholder")}
                 autoComplete="name"
                 disabled={saving}
               />
@@ -786,7 +944,7 @@ export default function BillingPage() {
                 onClick={() => void saveUdharBill(udharCustomerName)}
                 className="min-h-14 w-full rounded-2xl bg-[#16a34a] text-base font-bold text-white active:bg-green-700 disabled:opacity-40"
               >
-                {saving ? "Saving…" : "Save bill"}
+                {saving ? t("saving") : t("saveBill")}
               </button>
               <button
                 type="button"
@@ -797,7 +955,64 @@ export default function BillingPage() {
                 }}
                 className="min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100"
               >
-                Cancel
+                {t("cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {rateEditor ? (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col justify-end bg-black/45"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rate-editor-title"
+        >
+          <button
+            type="button"
+            className="min-h-12 flex-1"
+            aria-label={t("cancel")}
+            disabled={saving}
+            onClick={() => setRateEditor(null)}
+          />
+          <div className="rounded-t-3xl bg-white px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2 shadow-2xl">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-zinc-200" />
+            <h2 id="rate-editor-title" className="text-lg font-bold text-zinc-900">
+              {t("rateSheetTitle")}
+            </h2>
+            <input
+              value={rateEditor.draft}
+              onChange={(e) =>
+                setRateEditor((prev) =>
+                  prev ? { ...prev, draft: e.target.value } : prev,
+                )
+              }
+              className="mt-3 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base font-semibold tabular-nums outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+              inputMode="decimal"
+              autoFocus
+            />
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                className="min-h-14 w-full rounded-2xl bg-[#16a34a] text-base font-bold text-white active:bg-green-700"
+                onClick={() => {
+                  const raw = rateEditor.draft.replace(/[^\d.]/g, "");
+                  const n = parseFloat(raw);
+                  if (Number.isFinite(n) && n >= 0) {
+                    updateLineUnitPrice(rateEditor.productId, n);
+                  }
+                  setRateEditor(null);
+                }}
+              >
+                {t("rateSave")}
+              </button>
+              <button
+                type="button"
+                className="min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100"
+                onClick={() => setRateEditor(null)}
+              >
+                {t("cancel")}
               </button>
             </div>
           </div>

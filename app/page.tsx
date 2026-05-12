@@ -1,15 +1,11 @@
 "use client";
 
+import { useLocale } from "@/contexts/LocaleContext";
 import { supabase } from "@/lib/supabase";
+import { usePlan } from "@/hooks/usePlan";
 import { useShopId } from "@/hooks/useShopId";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-
-const quickActions = [
-  { href: "/billing", title: "New Bill", subtitle: "नया बिल", primary: true },
-  { href: "/udhar", title: "Add Udhar", subtitle: "उधार जोड़ें", primary: false },
-  { href: "/reports", title: "View Reports", subtitle: "रिपोर्ट", primary: false },
-] as const;
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type BillRow = {
   id: string;
@@ -83,7 +79,9 @@ function mapBillRow(data: Record<string, unknown>): BillRow {
 }
 
 export default function Home() {
+  const { locale, t } = useLocale();
   const { shopId, loading: shopIdLoading } = useShopId();
+  const { plan, billsThisMonth } = usePlan();
   const [loading, setLoading] = useState(true);
   const [aajKamai, setAajKamai] = useState(0);
   const [kulUdhar, setKulUdhar] = useState(0);
@@ -243,26 +241,86 @@ export default function Home() {
     };
   }, [loading, last7Bills]);
 
+  const quickActions = useMemo(
+    () => [
+      {
+        href: "/billing",
+        title: t("qaBillTitle"),
+        subtitle: t("qaBillSub"),
+        primary: true as const,
+      },
+      {
+        href: "/udhar",
+        title: t("qaUdharTitle"),
+        subtitle: t("qaUdharSub"),
+        primary: false as const,
+      },
+      {
+        href: "/reports",
+        title: t("qaReportsTitle"),
+        subtitle: t("qaReportsSub"),
+        primary: false as const,
+      },
+    ],
+    [t],
+  );
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-3">
-        <div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
           <p className="text-3xl font-extrabold tracking-tight text-[#16a34a]">
             ShopSaathi
           </p>
           <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-            दुकान का साथी
+            {t("homeTagline")}
           </p>
+          </div>
+          <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#16a34a] ring-1 ring-green-200">
+            {plan.toUpperCase()} Plan
+          </span>
         </div>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
-            Namaste 👋
+            {t("homeWelcome")}
           </h1>
-          <p className="mt-1 text-base text-zinc-600">
-            Welcome — आपकी दुकान, आसान प्रबंधन
-          </p>
+          <p className="mt-1 text-base text-zinc-600">{t("homeWelcomeSub")}</p>
         </div>
       </header>
+
+      {plan === "free" ? (
+        <section className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm ring-1 ring-zinc-100">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-zinc-700">
+              {locale === "en"
+                ? `${billsThisMonth}/30 ${t("billsUsedSuffix")}`
+                : `30 mein se ${billsThisMonth} bills use kiye`}
+            </p>
+            <p className="text-xs font-bold text-zinc-500">{billsThisMonth}/30</p>
+          </div>
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-100">
+            <div
+              className="h-full rounded-full bg-[#16a34a]"
+              style={{ width: `${Math.min(100, Math.round((billsThisMonth / 30) * 100))}%` }}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {plan === "free" && billsThisMonth > 25 ? (
+        <section className="rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-4 shadow-sm">
+          <p className="text-sm font-bold text-orange-900">
+            {t("homeUpgradeHint")}
+          </p>
+          <Link
+            href="/more"
+            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl bg-[#16a34a] px-4 text-sm font-bold text-white active:bg-green-700"
+          >
+            {t("upgrade")}
+          </Link>
+        </section>
+      ) : null}
 
       <section className="grid gap-3 sm:grid-cols-2" aria-label="Today overview">
         {loading ? (
@@ -281,39 +339,39 @@ export default function Home() {
         ) : (
           <>
             <article className="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm ring-1 ring-zinc-100">
-              <p className="text-sm font-medium text-zinc-500">Aaj ki Kamai</p>
+              <p className="text-sm font-medium text-zinc-500">{t("homeTodaySales")}</p>
               <p className="mt-2 text-2xl font-bold tabular-nums text-zinc-900">
                 {formatRupee(aajKamai)}
               </p>
-              <p className="mt-1 text-xs text-zinc-400">आज की बिक्री (bills)</p>
+              <p className="mt-1 text-xs text-zinc-400">{t("homeTodaySalesSub")}</p>
             </article>
             <article className="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm ring-1 ring-zinc-100">
-              <p className="text-sm font-medium text-zinc-500">Kul Udhar</p>
+              <p className="text-sm font-medium text-zinc-500">{t("homeUdharTotal")}</p>
               <p className="mt-2 text-2xl font-bold tabular-nums text-zinc-900">
                 {formatRupee(kulUdhar)}
               </p>
-              <p className="mt-1 text-xs text-zinc-400">बकाया जोड़</p>
+              <p className="mt-1 text-xs text-zinc-400">{t("homeUdharSub")}</p>
             </article>
             <article className="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm ring-1 ring-zinc-100">
-              <p className="text-sm font-medium text-zinc-500">Aaj ke Bills</p>
+              <p className="text-sm font-medium text-zinc-500">{t("homeBillsToday")}</p>
               <p className="mt-2 text-2xl font-bold tabular-nums text-[#16a34a]">
                 {aajBills}
               </p>
-              <p className="mt-1 text-xs text-zinc-400">आज के बिल</p>
+              <p className="mt-1 text-xs text-zinc-400">{t("homeBillsTodaySub")}</p>
             </article>
             <article className="rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-4 shadow-sm ring-1 ring-orange-100/80">
               <p className="text-sm font-semibold text-orange-800/90">
-                Kam Stock
+                {t("homeLowStock")}
               </p>
               <p className="mt-2 text-xl font-bold leading-snug text-red-600 sm:text-2xl">
-                <span className="text-orange-800/90">Kam Stock:</span>{" "}
+                <span className="text-orange-800/90">{t("homeLowStock")}:</span>{" "}
                 <span className="tabular-nums text-red-600">{kamStock}</span>{" "}
                 <span className="text-base font-semibold text-orange-800">
                   items
                 </span>
               </p>
               <p className="mt-1 text-xs font-medium text-orange-800/80">
-                stock &lt; 5
+                {t("homeLowStockSub")}
               </p>
             </article>
           </>
@@ -322,7 +380,7 @@ export default function Home() {
 
       <section aria-label="Recent bills">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Haal ke Bills / हाल के बिल
+          {t("homeRecentBills")}
         </h2>
         {loading ? (
           <div className="flex flex-col gap-2">
@@ -342,7 +400,7 @@ export default function Home() {
           </div>
         ) : recentBills.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500">
-            Abhi koi bill nahi — pehla bill banayein
+            {t("homeNoBills")}
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -362,7 +420,7 @@ export default function Home() {
                         : "bg-green-50 text-[#16a34a] ring-1 ring-green-100"
                     }`}
                   >
-                    {b.is_udhar ? "Udhar" : "Cash"}
+                    {b.is_udhar ? t("udhar") : t("cash")}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
@@ -381,7 +439,7 @@ export default function Home() {
 
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Quick actions / जल्दी के काम
+          {t("homeQuick")}
         </h2>
         <div className="flex flex-col gap-3">
           {quickActions.map((action) => (
@@ -420,7 +478,7 @@ export default function Home() {
       {!loading && last7Bills.length > 0 ? (
         <section aria-label="AI insights">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Insights ✨
+            {t("homeInsights")}
           </h2>
           {insightsLoading ? (
             <div className="grid gap-3 sm:grid-cols-3">

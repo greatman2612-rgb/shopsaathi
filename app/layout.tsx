@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import AppProviders from "@/components/AppProviders";
 import BottomNav from "@/components/BottomNav";
 import OfflineModeToast from "@/components/OfflineModeToast";
 import "./globals.css";
@@ -31,11 +32,13 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-dvh bg-white font-sans text-zinc-900">
-        <div className="mx-auto flex min-h-dvh max-w-lg flex-col">
-          <OfflineModeToast />
-          <main className="flex-1 px-4 pb-24 pt-4">{children}</main>
-          <BottomNav />
-        </div>
+        <AppProviders>
+          <div className="mx-auto flex min-h-dvh max-w-lg flex-col">
+            <OfflineModeToast />
+            <main className="flex-1 px-4 pb-24 pt-4">{children}</main>
+            <BottomNav />
+          </div>
+        </AppProviders>
       </body>
     </html>
   );

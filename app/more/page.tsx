@@ -1,5 +1,6 @@
 "use client";
 
+import { useLocale } from "@/contexts/LocaleContext";
 import { useShopId } from "@/hooks/useShopId";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
@@ -21,6 +22,7 @@ const SHOP_TYPE_OPTIONS = [
 type PlanId = "free" | "basic" | "pro" | "business";
 
 export default function MorePage() {
+  const { locale, setLocale, t } = useLocale();
   const { shopId, loading } = useShopId();
   const [shopName, setShopName] = useState("Meri Dukan");
   const [shopType, setShopType] = useState<(typeof SHOP_TYPE_OPTIONS)[number]>(
@@ -191,6 +193,38 @@ export default function MorePage() {
         <h1 className="text-xl font-bold text-zinc-900">More / और</h1>
         <p className="text-sm text-zinc-500">{"Settings & profile"}</p>
       </header>
+
+      <section
+        className="rounded-2xl border border-green-100 bg-green-50/50 p-4 shadow-sm ring-1 ring-green-100/80"
+        aria-label="App language"
+      >
+        <p className="text-sm font-bold text-zinc-900">{t("languageHeading")}</p>
+        <p className="mt-1 text-xs text-zinc-600">{t("languageHint")}</p>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setLocale("hi")}
+            className={`min-h-12 rounded-2xl text-sm font-bold shadow-sm active:scale-[0.99] ${
+              locale === "hi"
+                ? "bg-[#16a34a] text-white ring-2 ring-green-300"
+                : "border border-zinc-200 bg-white text-zinc-800"
+            }`}
+          >
+            {t("langHindi")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setLocale("en")}
+            className={`min-h-12 rounded-2xl text-sm font-bold shadow-sm active:scale-[0.99] ${
+              locale === "en"
+                ? "bg-[#16a34a] text-white ring-2 ring-green-300"
+                : "border border-zinc-200 bg-white text-zinc-800"
+            }`}
+          >
+            {t("langEnglish")}
+          </button>
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm ring-1 ring-zinc-100">
         <div className="flex items-start gap-4">

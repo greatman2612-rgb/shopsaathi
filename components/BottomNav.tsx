@@ -1,18 +1,20 @@
 "use client";
 
+import { useLocale } from "@/contexts/LocaleContext";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const tabs = [
-  { href: "/", labelEn: "Home", labelHi: "घर" },
-  { href: "/billing", labelEn: "Billing", labelHi: "बिलिंग" },
-  { href: "/udhar", labelEn: "Udhar", labelHi: "उधार" },
-  { href: "/inventory", labelEn: "Inventory", labelHi: "स्टॉक" },
-  { href: "/more", labelEn: "More", labelHi: "और" },
+  { href: "/", primary: "navHome" as const, sub: "navSubHome" as const },
+  { href: "/billing", primary: "navBilling" as const, sub: "navSubBilling" as const },
+  { href: "/udhar", primary: "navUdhar" as const, sub: "navSubUdhar" as const },
+  { href: "/inventory", primary: "navInventory" as const, sub: "navSubInventory" as const },
+  { href: "/more", primary: "navMore" as const, sub: "navSubMore" as const },
 ] as const;
 
 export default function BottomNav() {
   const pathname = usePathname();
+  const { locale, t } = useLocale();
 
   return (
     <nav
@@ -38,15 +40,17 @@ export default function BottomNav() {
               aria-current={active ? "page" : undefined}
             >
               <span className="truncate text-xs font-semibold leading-tight">
-                {tab.labelEn}
+                {t(tab.primary)}
               </span>
-              <span
-                className={`truncate text-[10px] leading-tight ${
-                  active ? "font-medium text-[#16a34a]" : "font-normal text-zinc-500"
-                }`}
-              >
-                {tab.labelHi}
-              </span>
+              {locale === "hi" && t(tab.sub) ? (
+                <span
+                  className={`truncate text-[10px] leading-tight ${
+                    active ? "font-medium text-[#16a34a]" : "font-normal text-zinc-500"
+                  }`}
+                >
+                  {t(tab.sub)}
+                </span>
+              ) : null}
             </Link>
           );
         })}

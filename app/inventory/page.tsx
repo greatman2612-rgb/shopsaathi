@@ -1,7 +1,10 @@
 "use client";
 
+import { useLocale } from "@/contexts/LocaleContext";
 import { useShopId } from "@/hooks/useShopId";
+import { usePlan } from "@/hooks/usePlan";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Product = {
@@ -11,17 +14,6 @@ type Product = {
   qty: number;
   category: string;
 };
-
-const SEED_PRODUCTS: Omit<Product, "id">[] = [
-  { name: "Parle-G 50g", price: 5, qty: 24, category: "Biscuit" },
-  { name: "Tata Salt 1kg", price: 22, qty: 3, category: "Grocery" },
-  { name: "Surf Excel 200g", price: 45, qty: 8, category: "Detergent" },
-  { name: "Maggi 70g", price: 14, qty: 2, category: "Noodles" },
-  { name: "Amul Butter 100g", price: 55, qty: 12, category: "Dairy" },
-  { name: "Colgate 100g", price: 40, qty: 4, category: "Toothpaste" },
-  { name: "Britannia Bread", price: 35, qty: 6, category: "Bakery" },
-  { name: "Dettol Soap", price: 38, qty: 1, category: "Soap" },
-];
 
 function formatRupee(n: number) {
   return `₹${n % 1 === 0 ? n.toFixed(0) : n.toFixed(2)}`;
@@ -68,7 +60,9 @@ function PencilIcon({ className }: { className?: string }) {
 }
 
 export default function InventoryPage() {
+  const { t } = useLocale();
   const { shopId, loading: shopIdLoading } = useShopId();
+  const { limits } = usePlan();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -93,29 +87,11 @@ export default function InventoryPage() {
       if (!silent) setLoading(true);
       setError(null);
       try {
-        let { data, error } = await supabase
+        const { data, error } = await supabase
           .from("products")
           .select("*")
           .eq("shop_id", shopId);
         if (error) throw error;
-        if ((data ?? []).length === 0) {
-          for (const p of SEED_PRODUCTS) {
-            const { error: insError } = await supabase.from("products").insert({
-              shop_id: shopId,
-              name: p.name,
-              price: p.price,
-              stock_qty: p.qty,
-              category: p.category,
-              created_at: new Date().toISOString(),
-            });
-            if (insError) break;
-          }
-          const r2 = await supabase
-            .from("products")
-            .select("*")
-            .eq("shop_id", shopId);
-          data = r2.data ?? [];
-        }
         const list = (data ?? []).map((row) =>
           mapProductRow(row as Record<string, unknown>),
         );
@@ -266,9 +242,26 @@ export default function InventoryPage() {
   return (
     <div className="relative flex flex-col gap-4 pb-28">
       <header>
-        <h1 className="text-xl font-bold text-zinc-900">Inventory / स्टॉक</h1>
-        <p className="text-sm text-zinc-500">ShopSaathi — maal ka hisaab</p>
+        <h1 className="text-xl font-bold text-zinc-900">{t("invHeading")}</h1>
+        <p className="text-sm text-zinc-500">{t("invSub")}</p>
       </header>
+
+      {!limits.hasInventory ? (
+        <div className="rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-5 text-center shadow-sm">
+          <p className="text-lg font-extrabold text-zinc-900">
+            Inventory feature Pro plan mein available hai! 🔒
+          </p>
+          <p className="mt-1 text-sm font-medium text-zinc-600">
+            Upgrade karo ₹399/month mein.
+          </p>
+          <Link
+            href="/more"
+            className="mx-auto mt-4 inline-flex min-h-12 items-center justify-center rounded-2xl bg-[#16a34a] px-5 text-sm font-bold text-white shadow-md active:bg-green-700"
+          >
+            Upgrade Karo
+          </Link>
+        </div>
+      ) : null}
 
       {error ? (
         <p
@@ -279,7 +272,7 @@ export default function InventoryPage() {
         </p>
       ) : null}
 
-      {loading ? (
+      {limits.hasInventory && loading ? (
         <div
           className="flex flex-col items-center justify-center gap-3 py-24"
           role="status"
@@ -289,14 +282,14 @@ export default function InventoryPage() {
             className="h-12 w-12 animate-spin rounded-full border-4 border-green-200 border-t-[#16a34a]"
             aria-hidden
           />
-          <p className="text-sm font-medium text-zinc-500">Loading…</p>
+          <p className="text-sm font-medium text-zinc-500">{t("loading")}</p>
         </div>
-      ) : (
+      ) : limits.hasInventory ? (
         <>
           <section className="grid grid-cols-2 gap-3" aria-label="Summary">
             <div className="rounded-2xl border border-zinc-100 bg-white p-3 shadow-sm ring-1 ring-zinc-100">
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Kul Items
+                {t("invTotalItems")}
               </p>
               <p className="mt-1 text-2xl font-extrabold tabular-nums text-zinc-900">
                 {products.length}
@@ -304,13 +297,13 @@ export default function InventoryPage() {
             </div>
             <div className="rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-3 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-wide text-orange-800/90">
-                Kam Stock
+                {t("invLowStock")}
               </p>
               <p className="mt-1 text-2xl font-extrabold tabular-nums text-red-600">
                 {kamStockCount}
               </p>
               <p className="mt-0.5 text-[10px] font-medium text-orange-800/80">
-                qty &lt; 5
+                {t("invLowHint")}
               </p>
             </div>
           </section>
@@ -321,14 +314,24 @@ export default function InventoryPage() {
           <input
             id="inv-search"
             type="search"
-            placeholder="Product dhundo..."
+            placeholder={t("invSearchPh")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="min-h-14 w-full rounded-2xl border border-zinc-200 bg-zinc-50 px-4 text-base text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-[#16a34a] focus:bg-white focus:ring-2 focus:ring-[#16a34a]/25"
           />
 
           <section aria-label="Products" className="flex flex-col gap-3">
-            {filtered.length === 0 ? (
+            {products.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-500">
+                <p className="text-3xl" aria-hidden>
+                  📦
+                </p>
+                <p className="mt-2 font-semibold text-zinc-700">
+                  Koi product nahi hai abhi.
+                </p>
+                <p className="mt-1">+ button se apne products add karo!</p>
+              </div>
+            ) : filtered.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-10 text-center text-sm text-zinc-500">
                 Koi product nahi mila
               </p>
@@ -360,7 +363,7 @@ export default function InventoryPage() {
                       <div className="mt-3 flex flex-wrap items-center gap-3">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                            Stock
+                            {t("invStock")}
                           </p>
                           <p
                             className={`text-xl font-extrabold tabular-nums ${stockTextClass(
@@ -372,7 +375,7 @@ export default function InventoryPage() {
                         </div>
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                            Price / unit
+                            {t("invPrice")}
                           </p>
                           <p className="text-lg font-bold tabular-nums text-zinc-900">
                             {formatRupee(p.price)}
@@ -381,7 +384,7 @@ export default function InventoryPage() {
                       </div>
                       {low ? (
                         <span className="mt-3 inline-flex items-center rounded-full bg-orange-100 px-3 py-1.5 text-xs font-bold text-orange-800 ring-1 ring-orange-200/80">
-                          ⚠️ Kam Stock
+                          ⚠️ {t("invLowBadge")}
                         </span>
                       ) : null}
                     </div>
@@ -419,9 +422,9 @@ export default function InventoryPage() {
                   id="edit-product-title"
                   className="text-lg font-bold text-zinc-900"
                 >
-                  Product edit
+                  {t("invEditTitle")}
                 </h2>
-                <p className="text-sm text-zinc-500">Naam, daam, stock update</p>
+                <p className="text-sm text-zinc-500">{t("invEditSub")}</p>
 
                 <label className="mt-4 block text-sm font-semibold text-zinc-700">
                   Name
@@ -443,7 +446,7 @@ export default function InventoryPage() {
                   />
                 </label>
                 <label className="mt-3 block text-sm font-semibold text-zinc-700">
-                  Quantity
+                  {t("invQty")}
                   <input
                     value={editQty}
                     onChange={(e) => setEditQty(e.target.value)}
@@ -454,7 +457,24 @@ export default function InventoryPage() {
                 </label>
 
                 <p className="mt-4 text-xs font-bold uppercase tracking-wide text-zinc-500">
-                  + Stock Badhao
+                  {t("decreaseStock")}
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {[-1, -5, -10].map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      disabled={savingEdit || stockBumpBusy}
+                      onClick={() => void bumpEditQty(d)}
+                      className="min-h-12 rounded-2xl border border-zinc-200 text-sm font-bold text-zinc-800 hover:bg-red-50 active:bg-red-100 disabled:opacity-40"
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="mt-4 text-xs font-bold uppercase tracking-wide text-zinc-500">
+                  {t("increaseStock")}
                 </p>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {[5, 10, 20].map((d) => (
@@ -477,7 +497,7 @@ export default function InventoryPage() {
                     onClick={() => void saveEdit()}
                     className="min-h-14 w-full rounded-2xl bg-[#16a34a] text-base font-bold text-white active:bg-green-700 disabled:opacity-40"
                   >
-                    {savingEdit ? "Saving…" : "Save"}
+                    {savingEdit ? t("saving") : t("invSave")}
                   </button>
                   <button
                     type="button"
@@ -485,7 +505,7 @@ export default function InventoryPage() {
                     onClick={closeEdit}
                     className="min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100 disabled:opacity-40"
                   >
-                    Cancel
+                    {t("cancel")}
                   </button>
                 </div>
               </div>
@@ -511,9 +531,9 @@ export default function InventoryPage() {
                   id="add-product-title"
                   className="text-lg font-bold text-zinc-900"
                 >
-                  Naya product
+                  {t("invAddTitle")}
                 </h2>
-                <p className="text-sm text-zinc-500">Naam, price, qty, category</p>
+                <p className="text-sm text-zinc-500">{t("invAddSub")}</p>
 
                 <label className="mt-4 block text-sm font-semibold text-zinc-700">
                   Product Name
@@ -569,7 +589,7 @@ export default function InventoryPage() {
                     }
                     className="min-h-14 w-full rounded-2xl bg-[#16a34a] text-base font-bold text-white active:bg-green-700 disabled:opacity-40"
                   >
-                    {savingAdd ? "Saving…" : "Save product"}
+                    {savingAdd ? t("saving") : t("invSaveProduct")}
                   </button>
                   <button
                     type="button"
@@ -577,14 +597,14 @@ export default function InventoryPage() {
                     onClick={() => setAddOpen(false)}
                     className="min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100 disabled:opacity-40"
                   >
-                    Band karo
+                    {t("invClose")}
                   </button>
                 </div>
               </div>
             </div>
           ) : null}
         </>
-      )}
+      ) : null}
     </div>
   );
 }

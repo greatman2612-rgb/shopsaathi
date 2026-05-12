@@ -1,6 +1,7 @@
 "use client";
 
 import { useShopId } from "@/hooks/useShopId";
+import { usePlan } from "@/hooks/usePlan";
 import { supabase } from "@/lib/supabase";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -41,6 +42,7 @@ function buildReminderMessage(name: string, amount: number) {
 
 export default function UdharPage() {
   const { shopId, loading: shopIdLoading } = useShopId();
+  const { limits } = usePlan();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -415,7 +417,14 @@ export default function UdharPage() {
                             <button
                               type="button"
                               disabled={
-                                c.udhar <= 0 || reminderGeneratingId === c.id
+                                c.udhar <= 0 ||
+                                reminderGeneratingId === c.id ||
+                                !limits.hasWhatsappReminder
+                              }
+                              title={
+                                !limits.hasWhatsappReminder
+                                  ? "WhatsApp reminder Basic plan mein available hai"
+                                  : undefined
                               }
                               className="flex min-h-14 flex-1 items-center justify-center rounded-2xl bg-orange-500 text-base font-bold text-white shadow-sm active:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
                               onClick={() => void sendReminder(c)}

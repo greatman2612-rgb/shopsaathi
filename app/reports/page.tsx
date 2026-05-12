@@ -1,7 +1,9 @@
 "use client";
 
 import { useShopId } from "@/hooks/useShopId";
+import { usePlan } from "@/hooks/usePlan";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Period = "today" | "week" | "month";
@@ -154,6 +156,7 @@ function BestBar({ value, max }: { value: number; max: number }) {
 
 export default function ReportsPage() {
   const { shopId, loading: shopIdLoading } = useShopId();
+  const { limits } = usePlan();
   const [period, setPeriod] = useState<Period>("today");
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState({
@@ -332,6 +335,11 @@ export default function ReportsPage() {
       : period === "week"
         ? "Is Hafte"
         : "Is Mahine";
+  const noReportData =
+    !loading &&
+    summary.totalBills === 0 &&
+    bestSelling.length === 0 &&
+    recentBills.length === 0;
 
   const shareWhatsApp = () => {
     const bestLines = bestSelling
@@ -386,6 +394,30 @@ export default function ReportsPage() {
         <p className="text-sm text-zinc-500">ShopSaathi — hisaab kitab</p>
       </header>
 
+      {!limits.hasReports ? (
+        <section className="rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-5 text-center shadow-sm">
+          <p className="text-lg font-extrabold text-zinc-900">
+            Reports feature Basic plan se available hai! 🔒
+          </p>
+          <p className="mt-1 text-sm font-medium text-zinc-600">
+            Upgrade karo ₹199/month mein.
+          </p>
+          <Link
+            href="/more"
+            className="mx-auto mt-4 inline-flex min-h-12 items-center justify-center rounded-2xl bg-[#16a34a] px-5 text-sm font-bold text-white shadow-md active:bg-green-700"
+          >
+            Upgrade Karo
+          </Link>
+        </section>
+      ) : null}
+
+      {limits.hasReports ? (
+      <>
+      {noReportData ? (
+        <p className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-8 text-center text-sm font-medium text-zinc-600">
+          Abhi koi data nahi hai. Bills banao toh reports yahan dikhenge!
+        </p>
+      ) : null}
       <div
         className="flex rounded-2xl bg-zinc-100 p-1"
         role="tablist"
@@ -676,6 +708,8 @@ export default function ReportsPage() {
           WhatsApp pe Share Karo 📊
         </button>
       </div>
+      </>
+      ) : null}
     </div>
   );
 }
