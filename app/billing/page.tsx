@@ -53,6 +53,13 @@ function newAiLineId() {
   return `ai:${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function newManualLineId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `manual:${crypto.randomUUID()}`;
+  }
+  return `manual:${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 type AiSuggestion = { name: string; price: number };
 
 function buildDbItems(snapshot: BillLine[]) {
@@ -117,6 +124,10 @@ export default function BillingPage() {
     productId: string;
     draft: string;
   } | null>(null);
+  const [customItemOpen, setCustomItemOpen] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
+  const [customQty, setCustomQty] = useState("1");
 
   const filtered = useMemo(() => {
     const q = normalize(search);
@@ -234,6 +245,29 @@ export default function BillingPage() {
     };
   }, [search, shopType, shopId, limits.hasAI]);
 
+  const addCustomLineToBill = useCallback(() => {
+    const name = customName.trim().slice(0, 120);
+    const price = Math.round(parseFloat(customPrice.replace(/[^\d.]/g, "")) * 100) / 100;
+    const qty = Math.max(1, Math.floor(parseFloat(customQty.replace(/[^\d.]/g, "")) || 1));
+    if (!name || !Number.isFinite(price) || price < 0) return;
+    const id = newManualLineId();
+    const label = labelWithPrice(name, price);
+    setLines((prev) => [
+      ...prev,
+      {
+        productId: id,
+        label,
+        unitPrice: price,
+        qty,
+      },
+    ]);
+    setCustomItemOpen(false);
+    setCustomName("");
+    setCustomPrice("");
+    setCustomQty("1");
+    setSearch("");
+  }, [customName, customPrice, customQty]);
+
   const addAiSuggestionToBill = useCallback((s: AiSuggestion) => {
     const name = s.name.trim().slice(0, 120);
     const price = Math.round(s.price * 100) / 100;
@@ -333,6 +367,10 @@ export default function BillingPage() {
     setSaveError(null);
     setDiscountInput("");
     setRateEditor(null);
+    setCustomItemOpen(false);
+    setCustomName("");
+    setCustomPrice("");
+    setCustomQty("1");
   }, []);
 
   const buildWhatsAppText = useCallback(
@@ -690,9 +728,27 @@ export default function BillingPage() {
           <p className="mt-2 px-1 text-sm text-zinc-500">{t("noMatch")}</p>
         ) : null}
         {search.trim().length === 0 && products.length === 0 ? (
-          <p className="mt-2 px-1 text-sm text-zinc-500">{t("emptyInventoryHint")}</p>
+          <p className="mt-2 px-1 text-sm text-zinc-500">
+            {!limits.hasInventory ? t("emptyNoCatalogHint") : t("emptyInventoryHint")}
+          </p>
         ) : null}
       </div>
+
+      {!limits.hasInventory ? (
+        <div className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-3 ring-1 ring-zinc-100">
+          <button
+            type="button"
+            onClick={() => {
+              setSaveError(null);
+              setCustomItemOpen(true);
+            }}
+            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 bg-white px-3 text-sm font-bold text-zinc-800 shadow-sm active:bg-green-50"
+          >
+            <span aria-hidden>➕</span>
+            {t("customItemBtn")}
+          </button>
+        </div>
+      ) : null}
 
       {limits.hasAI && search.trim().length >= 2 ? (
         <div className="rounded-2xl border border-green-100 bg-green-50/60 p-3 shadow-sm ring-1 ring-green-100/80">
@@ -1011,6 +1067,96 @@ export default function BillingPage() {
                 type="button"
                 className="min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100"
                 onClick={() => setRateEditor(null)}
+              >
+                {t("cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {customItemOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col justify-end bg-black/45"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="custom-item-title"
+        >
+          <button
+            type="button"
+            className="min-h-12 flex-1"
+            aria-label={t("cancel")}
+            disabled={saving}
+            onClick={() => {
+              if (!saving) setCustomItemOpen(false);
+            }}
+          />
+          <div className="max-h-[90dvh] overflow-auto rounded-t-3xl bg-white px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2 shadow-2xl">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-zinc-200" />
+            <h2 id="custom-item-title" className="text-lg font-bold text-zinc-900">
+              {t("customItemTitle")}
+            </h2>
+            <p className="text-sm text-zinc-500">{t("customItemSubtitle")}</p>
+
+            <label className="mt-4 block text-sm font-semibold text-zinc-700">
+              {t("customItemName")}
+              <input
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                className="mt-1 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+                placeholder={t("searchPlaceholder")}
+                autoComplete="off"
+                disabled={saving}
+              />
+            </label>
+            <label className="mt-3 block text-sm font-semibold text-zinc-700">
+              {t("customItemPrice")}
+              <input
+                value={customPrice}
+                onChange={(e) => setCustomPrice(e.target.value)}
+                className="mt-1 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base font-semibold tabular-nums outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+                inputMode="decimal"
+                placeholder="0"
+                disabled={saving}
+              />
+            </label>
+            <label className="mt-3 block text-sm font-semibold text-zinc-700">
+              {t("customItemQty")}
+              <input
+                value={customQty}
+                onChange={(e) => setCustomQty(e.target.value)}
+                className="mt-1 min-h-14 w-full rounded-2xl border border-zinc-200 px-4 text-base font-semibold tabular-nums outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+                inputMode="numeric"
+                placeholder="1"
+                disabled={saving}
+              />
+            </label>
+
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                disabled={
+                  saving ||
+                  !customName.trim() ||
+                  !Number.isFinite(
+                    Math.round(
+                      parseFloat(customPrice.replace(/[^\d.]/g, "")) * 100,
+                    ) / 100,
+                  ) ||
+                  Math.round(parseFloat(customPrice.replace(/[^\d.]/g, "")) * 100) /
+                    100 <
+                    0
+                }
+                onClick={() => addCustomLineToBill()}
+                className="min-h-14 w-full rounded-2xl bg-[#16a34a] text-base font-bold text-white active:bg-green-700 disabled:opacity-40"
+              >
+                {t("customItemAdd")}
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setCustomItemOpen(false)}
+                className="min-h-12 w-full rounded-2xl text-base font-semibold text-zinc-600 active:bg-zinc-100"
               >
                 {t("cancel")}
               </button>

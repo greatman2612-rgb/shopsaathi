@@ -34,6 +34,23 @@ export const UI_STRINGS = {
     hi: "Apne products inventory mein add karo",
     en: "Add products in Stock first",
   },
+  emptyNoCatalogHint: {
+    hi: "Neeche \"Naya item\" se bina stock ke item daal sakte ho — naam, daam, ginti likho.",
+    en: 'Use "Add item" below — enter name, price, and quantity without saving to stock.',
+  },
+  customItemBtn: {
+    hi: "Naya item (stock / inventory ke bina)",
+    en: "Add item (not in stock)",
+  },
+  customItemTitle: { hi: "Bill par naya item", en: "Add line to bill" },
+  customItemSubtitle: {
+    hi: "Naam, daam (₹), kitni — inventory mein save nahi hoga",
+    en: "Name, price (₹), qty — not saved to your stock list",
+  },
+  customItemName: { hi: "Item ka naam", en: "Item name" },
+  customItemPrice: { hi: "Ek ka daam (₹)", en: "Price each (₹)" },
+  customItemQty: { hi: "Kitni piece / qty", en: "Quantity" },
+  customItemAdd: { hi: "Bill mein daalo", en: "Add to bill" },
   billItems: { hi: "Bill items", en: "Bill items" },
   linesCount: { hi: "lines", en: "lines" },
   emptyCart: {
